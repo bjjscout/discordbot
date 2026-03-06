@@ -1,0 +1,20 @@
+# Video Processing Service Requirements
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Video Processing
+moviepy>=1.0.3
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.0
+opencv-python>=4.9.0
+
+# Cloud Storage (R2)
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0
+yt-dlp>=2024.1.0

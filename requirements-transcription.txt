@@ -1,0 +1,16 @@
+# Transcription Service Requirements
+# FastWhisper for speech-to-text
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Transcription
+faster-whisper>=0.10.0
+
+# Audio processing
+soundfile>=0.12.0
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0

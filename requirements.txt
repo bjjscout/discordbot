@@ -1,0 +1,64 @@
+# Vidmaker3 Requirements
+# Install with: pip install -r requirements.txt
+
+# Core Discord
+discord>=2.0.0
+discord.py>=2.3.0
+
+# Web Framework & API
+aiohttp>=3.9.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Job Queue & Redis
+redis>=5.0.0
+rq>=1.16.0
+
+# Configuration
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Cloud Storage
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Google APIs
+google-api-python-client>=2.125.0
+google-auth>=2.25.0
+
+# Video Processing
+ffmpeg-python>=0.2.0
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.0
+moviepy>=1.0.3
+opencv-python>=4.9.0
+
+# ML & AI (for transcription & face detection)
+torch>=2.3.0
+torchvision>=0.18.0
+torchaudio>=2.3.0
+
+# Transcription
+faster-whisper>=0.10.0
+
+# Utilities
+requests>=2.31.0
+tqdm>=4.66.0
+Pillow>=10.2.0
+numpy>=1.26.0
+pyyaml>=6.0.0
+
+# Logging
+python-json-logger>=2.0.0
+structlog>=24.1.0
+
+# Testing (optional)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Development (optional)
+ruff>=0.2.0
+black>=24.1.0
+mypy>=1.8.0

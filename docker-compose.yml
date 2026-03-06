@@ -1,0 +1,46 @@
+# Vidmaker3 Discord Bot - Docker Compose
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose logs -f
+
+services:
+  # ============================================================
+  # Discord Bot - LIGHTWEIGHT
+  # ============================================================
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot-lightweight
+    container_name: vidmaker3-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./temp:/app/temp
+    depends_on:
+      - redis
+    networks:
+      - vidmaker3-network
+
+  # ============================================================
+  # Redis
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: vidmaker3-redis
+    restart: unless-stopped
+    networks:
+      - vidmaker3-network
+    volumes:
+      - redis-data:/data
+
+networks:
+  vidmaker3-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+

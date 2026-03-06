@@ -1,0 +1,18 @@
+# Face Detection Service Requirements
+# S3FD face detector
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# ML/AI
+torch>=2.3.0
+torchvision>=0.18.0
+
+# Computer Vision
+opencv-python>=4.9.0
+
+# Utilities
+numpy>=1.26.0
+Pillow>=10.2.0
+python-dotenv>=1.0.0

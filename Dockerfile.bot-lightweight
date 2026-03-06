@@ -1,0 +1,47 @@
+# Vidmaker3 Discord Bot - LIGHTWEIGHT VERSION
+#
+# This Dockerfile only includes the Discord bot logic.
+# Heavy ML/video processing is offloaded to separate API services.
+#
+# Services needed:
+# - transcription-service: For Whisper transcription
+# - video-processing-service: For video editing, subtitle burning
+# - face-detection-service: For S3FD face detection
+#
+# Build: docker build -f Dockerfile.bot-lightweight -t vidmaker3-bot .
+# Run:   docker-compose up
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies - minimal!
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy lightweight requirements
+COPY requirements-bot.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-bot.txt
+
+# Copy application code
+COPY . .
+
+# Create temp directory for downloads
+RUN mkdir -p /app/temp
+
+# Expose port (optional)
+EXPOSE 8080
+
+# Run the bot
+CMD ["python", "discord_bot_new.py"]
