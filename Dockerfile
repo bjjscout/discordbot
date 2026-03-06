@@ -40,12 +40,5 @@ COPY . .
 # Create temp directory
 RUN mkdir -p /app/temp
 
-# Expose port for health checks (if needed)
-EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8080/health', timeout=5)" || exit 1
-
 # Run the bot
 CMD ["python", "discord_bot_new.py"]
