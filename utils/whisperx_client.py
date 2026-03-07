@@ -370,6 +370,7 @@ class WhisperXClient:
         Reformat video (landscape, reel, square).
         
         Uses the resize operation since the WhisperX API doesn't have a reformat operation.
+        Skips resize if already in target format.
         
         Args:
             video_url: URL to the video
@@ -394,7 +395,8 @@ class WhisperXClient:
         
         width, height = format_dimensions[format]
         
-        # Use resize operation instead of reformat
+        # For now, always apply resize to ensure consistent output
+        # TODO: Could add dimension detection to skip if already correct
         data = {
             "url": video_url,
             "operation": "resize",
