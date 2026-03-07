@@ -324,7 +324,7 @@ class VideoCog(commands.Cog):
             if logo_type:
                 await self._send_message_with_rate_limit(ctx, "Adding logo overlay...")
                 # Get logo URL from subtitle_config
-                config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                config = SUBTITLE_CONFIGS.get(format, SUBTITLE_CONFIGS['landscape'])
                 logo_config = config.get('logo', {})
                 logo_url = logo_config.get('url', {}).get(logo_type.lower())
                 
@@ -352,7 +352,7 @@ class VideoCog(commands.Cog):
                 await self._send_message_with_rate_limit(ctx, "Transcribing video...")
                 
                 # Get font config from subtitle_config for the format
-                config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                config = SUBTITLE_CONFIGS.get(format, SUBTITLE_CONFIGS['landscape'])
                 
                 transcription = await self.whisperx.transcribe(
                     current_video_url, 
