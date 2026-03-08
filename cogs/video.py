@@ -324,7 +324,7 @@ class VideoCog(commands.Cog):
             if logo_type:
                 await self._send_message_with_rate_limit(ctx, "Adding logo overlay...")
                 # Get logo URL from subtitle_config
-                config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                config = SUBTITLE_CONFIGS.get(format, SUBTITLE_CONFIGS['landscape'])
                 logo_config = config.get('logo', {})
                 logo_url = logo_config.get('url', {}).get(logo_type.lower())
                 
@@ -352,7 +352,7 @@ class VideoCog(commands.Cog):
                 await self._send_message_with_rate_limit(ctx, "Transcribing video...")
                 
                 # Get font config from subtitle_config for the format
-                config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                config = SUBTITLE_CONFIGS.get(format, SUBTITLE_CONFIGS['landscape'])
                 
                 transcription = await self.whisperx.transcribe(
                     current_video_url, 
@@ -364,13 +364,14 @@ class VideoCog(commands.Cog):
                     font_bold=config.get('bold', 0)
                 )
                 
-                # Burn subtitles
+                # Burn subtitles - use ASS for better styling support
                 await self._send_message_with_rate_limit(ctx, "Burning subtitles...")
-                burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.srt_url, progress_callback=progress_callback)
+                burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.ass_url, progress_callback=progress_callback)
                 current_video_url = burn_result.output_url
                 
                 txt_url = transcription.txt_url
                 srt_url = transcription.srt_url
+                ass_url = transcription.ass_url
             
             # Step 6: Loop if needed (check duration - this is tricky with URLs, skip for now)
             # In production, you'd get video duration first
@@ -444,12 +445,6 @@ class VideoCog(commands.Cog):
                 return
             
             await self._send_message_with_rate_limit(ctx, f"Found {len(values)} rows to process")
-            
-            # Debug: Print first few rows to see what we're reading
-            if values:
-                await self._send_message_with_rate_limit(ctx, f"Debug: First row headers: {values[0]}")
-                if len(values) > 1:
-                    await self._send_message_with_rate_limit(ctx, f"Debug: Second row: {values[1][:5]}...")  # First 5 columns
             
             # Process each row
             for row_index, row in enumerate(values, start=2):
@@ -546,10 +541,11 @@ class VideoCog(commands.Cog):
                         )
                         
                         await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Burning subtitles...")
-                        burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.srt_url, progress_callback=progress_callback)
+                        # Use ASS subtitles for better burning results with styling
+                        burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.ass_url, progress_callback=progress_callback)
                         current_video_url = burn_result.output_url
                         
-                        combined_urls = f"TXT: {transcription.txt_url}\nSRT: {transcription.srt_url}"
+                        combined_urls = f"TXT: {transcription.txt_url}\nSRT: {transcription.srt_url}\nASS: {transcription.ass_url}"
                     
                     # Step 6: Loop if needed (skip for now - need duration info)
                     

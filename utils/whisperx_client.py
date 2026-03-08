@@ -363,45 +363,36 @@ class WhisperXClient:
         self,
         video_url: str,
         format: str,
-        fill_mode: str = "crop",
+        fill_mode: str = "pad",
         progress_callback=None
     ) -> FFmpegResult:
         """
         Reformat video (landscape, reel, square).
         
-        Uses the resize operation since the WhisperX API doesn't have a reformat operation.
-        Skips resize if already in target format.
+        Uses the reformat operation with scale+pad to maintain aspect ratio.
         
         Args:
             video_url: URL to the video
             format: Target format ("landscape", "reel", "square")
-            fill_mode: How to fill ("crop", "pad", "blur_background") - currently not implemented
+            fill_mode: How to fill ("crop", "pad", "blur_background")
             progress_callback: Optional async callback for progress updates
             
         Returns:
             FFmpegResult with output URL
         """
-        logger.info(f"Reformatting video to {format}: {video_url}")
+        logger.info(f"Reformatting video to {format} (fill_mode={fill_mode}): {video_url}")
         
-        # Define target dimensions for each format
-        format_dimensions = {
-            "landscape": (1920, 1080),
-            "reel": (1080, 1920),
-            "square": (1080, 1080)
-        }
+        # Validate format
+        valid_formats = ["landscape", "reel", "square"]
+        if format not in valid_formats:
+            raise ValueError(f"Unknown format: {format}. Supported: {valid_formats}")
         
-        if format not in format_dimensions:
-            raise ValueError(f"Unknown format: {format}. Supported: {list(format_dimensions.keys())}")
-        
-        width, height = format_dimensions[format]
-        
-        # For now, always apply resize to ensure consistent output
-        # TODO: Could add dimension detection to skip if already correct
+        # Use the reformat operation with format and fill_mode parameters
         data = {
             "url": video_url,
-            "operation": "resize",
-            "resize_width": width,
-            "resize_height": height
+            "operation": "reformat",
+            "format": format,
+            "fill_mode": fill_mode
         }
         
         job_id = await self._submit_job("/ffmpeg", data)
