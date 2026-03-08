@@ -23,6 +23,13 @@ from utils.whisperx_client import WhisperXClient, get_whisperx_client
 # Import subtitle config for logo URLs
 from subtitle_config import SUBTITLE_CONFIGS
 
+# Video dimensions for each format (for ASS PlayRes scaling)
+FORMAT_DIMENSIONS = {
+    "reel": (540, 960),      # 9:16 vertical
+    "square": (1080, 1080),  # 1:1
+    "landscape": (1920, 1080),  # 16:9
+}
+
 
 def get_video_id(url: str) -> str:
     """Extract video ID from YouTube URL (lightweight, no dependencies)"""
@@ -362,6 +369,8 @@ class VideoCog(commands.Cog):
                     font_size=config.get('fontsize'),
                     font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
                     font_bold=config.get('bold', 0)
+                    video_width=FORMAT_DIMENSIONS.get(format, (1920, 1080))[0],
+                    video_height=FORMAT_DIMENSIONS.get(format, (1920, 1080))[1]
                 )
                 
                 # Burn subtitles - use ASS for better styling support
@@ -538,6 +547,8 @@ class VideoCog(commands.Cog):
                             font_size=config.get('fontsize'),
                             font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
                             font_bold=config.get('bold', 0)
+                            video_width=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[0],
+                            video_height=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[1]
                         )
                         
                         await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Burning subtitles...")

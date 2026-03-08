@@ -260,6 +260,9 @@ class WhisperXClient:
         font_size: int = None,
         font_color: str = None,
         font_bold: int = None,
+        # Video dimensions for ASS PlayRes
+        video_width: int = None,
+        video_height: int = None,
     ) -> TranscriptionResult:
         """
         Transcribe a video/audio file.
@@ -298,6 +301,11 @@ class WhisperXClient:
             data["font_color"] = font_color
         if font_bold is not None:
             data["font_bold"] = font_bold
+        # Add video dimensions
+        if video_width is not None:
+            data["video_width"] = video_width
+        if video_height is not None:
+            data["video_height"] = video_height
         
         job_id = await self._submit_job("/transcribe/url", data)
         result = await self._wait_for_job(job_id, progress_callback)
