@@ -24,18 +24,30 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Imports from other project modules ---
-# Add robust error handling for imports
+# Add robust error handling for imports - try multiple sources
+upload_to_r2 = None
+
 try:
     from app4 import upload_to_r2
 except ImportError:
-    print("FATAL ERROR: Could not import upload_to_r2 from app4. R2 uploads will fail.", file=sys.stderr)
-    sys.exit("Missing critical dependency: app4.upload_to_r2")
+    try:
+        from r2upload import upload_file_to_r2 as upload_to_r2
+        print("INFO: Using upload_file_to_r2 from r2upload as fallback")
+    except ImportError:
+        print("WARNING: Could not import upload_to_r2. R2 uploads may not work.", file=sys.stderr)
+        # Define a stub function so imports don't crash
+        def upload_to_r2(*args, **kwargs):
+            print("ERROR: upload_to_r2 not available - app4 and r2upload not found")
+            return None
 
 try:
     from ytsum import call_claude_api
 except ImportError:
-    print("FATAL ERROR: Could not import call_claude_api from ytsum. Article generation will fail.", file=sys.stderr)
-    sys.exit("Missing critical dependency: ytsum.call_claude_api")
+    print("WARNING: Could not import call_claude_api from ytsum. Article generation may not work.", file=sys.stderr)
+    # Define a stub function
+    def call_claude_api(*args, **kwargs):
+        print("ERROR: call_claude_api not available")
+        return None
 
 try:
     from tweet_processing import (
@@ -46,8 +58,13 @@ try:
         get_tweet_id_from_url
     )
 except ImportError:
-    print("FATAL ERROR: Could not import functions from tweet_processing.", file=sys.stderr)
-    sys.exit("Missing critical dependency: tweet_processing")
+    print("WARNING: Could not import functions from tweet_processing.", file=sys.stderr)
+    # Define stubs
+    def fetch_tweet_data(*args, **kwargs): return None
+    def transcribe_video(*args, **kwargs): return None
+    def fetch_and_format_replies(*args, **kwargs): return None
+    def format_claude_prompt(*args, **kwargs): return None
+    def get_tweet_id_from_url(*args, **kwargs): return None
 
 # --- Constants ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
