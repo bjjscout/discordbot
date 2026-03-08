@@ -93,14 +93,14 @@ async def load_cogs():
     
     # Get list of cogs to load
     cogs_to_load = [
-        'video',      # !process_video, !process_sheet, !flo, !pull
-        'twitter',    # !tweet, !tweetsheet
-        'instagram',  # !ig, !igmake
-        'raptive',    # !rapcalf, !rapdoc
-        'scripts',    # !aiwriter, !flux
-        'summarization', # !audio
+        'video',      # !process_sheet only (process_video disabled)
+        # 'twitter',    # Disabled - !tweet, !tweetsheet
+        # 'instagram',  # Disabled - !ig, !igmake
+        # 'raptive',    # Disabled - !rapcalf, !rapdoc
+        # 'scripts',    # Disabled - !aiwriter, !flux
+        # 'summarization', # Disabled - !audio
         'utility',    # Utility commands
-        'webhooks',   # Webhook triggers
+        # 'webhooks',   # Disabled - Webhook triggers
         'whisper',    # !whisper - WhisperX API transcription
     ]
     

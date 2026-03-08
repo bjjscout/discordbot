@@ -290,6 +290,9 @@ class VideoCog(commands.Cog):
     )
     async def process_video_command(self, ctx, url: str, format: str = 'landscape', transcribe: str = 'n', start: str = None, end: str = None, logo_type: str = ''):
         """Process a video using the WhisperX API (orchestrator mode)."""
+        # This command is disabled - use !process_sheet instead
+        await self._send_message_with_rate_limit(ctx, "This command is disabled. Please use !process_sheet to process videos from Google Sheets.")
+        return
         await self._send_message_with_rate_limit(ctx, "Processing your video via API... This may take a while.")
         
         # Progress callback - only send updates every 60 seconds to avoid spam
