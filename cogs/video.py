@@ -368,7 +368,7 @@ class VideoCog(commands.Cog):
                     font_name=config.get('font', 'Arial'),
                     font_size=config.get('fontsize'),
                     font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
-                    font_bold=config.get('bold', 0)
+                    font_bold=config.get('bold', 0),
                     video_width=FORMAT_DIMENSIONS.get(format, (1920, 1080))[0],
                     video_height=FORMAT_DIMENSIONS.get(format, (1920, 1080))[1]
                 )
@@ -546,7 +546,7 @@ class VideoCog(commands.Cog):
                             font_name=config.get('font', 'Arial'),
                             font_size=config.get('fontsize'),
                             font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
-                            font_bold=config.get('bold', 0)
+                            font_bold=config.get('bold', 0),
                             video_width=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[0],
                             video_height=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[1]
                         )
