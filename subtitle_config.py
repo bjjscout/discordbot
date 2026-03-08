@@ -3,7 +3,7 @@
 SUBTITLE_CONFIGS = {
     'reel': {
         'font': 'The Bold Font',
-        'fontsize': 30,  # Font size for better visibility
+        'fontsize': 100,  # Match ClipGenius
         'color': '&HFFFFFF',  # White text
         'highlight_color': '&H00FFFF',  # Yellow highlight
         'max_chars': 30,  # Maximum characters per line
@@ -11,9 +11,10 @@ SUBTITLE_CONFIGS = {
         'back_color': '&H000000',  # Black shadow
         'secondary_color': '&HFFFFFF',  # Secondary color
         'shadow_offset': 4,  # Shadow offset
-        'text_position': 500,  # Position from top in pixels
-        'alignment': 8,  # Top center alignment
+        'text_position': 384,  # Match ClipGenius: 20% from bottom (1920 * 0.20 = 384)
+        'alignment': 2,  # Center alignment (ClipGenius uses 2)
         'bold': 1,  # Bold text
+        'outline': 3,  # ClipGenius uses 3
         'logo': {
             'url': {
                 'calf': 'https://calfkicker.com/wp-content/uploads/2023/12/calfkicker_new_font.png',
@@ -27,7 +28,7 @@ SUBTITLE_CONFIGS = {
 
     'landscape': {
         'font': 'The Bold Font',
-        'fontsize': 40,  # Font size for better visibility
+        'fontsize': 80,  # Match ClipGenius ratio for 1080 height
         'color': '&HFFFFFF',  # White text
         'highlight_color': '&H00FFFF',  # Yellow highlight
         'max_chars': 30,  # Maximum characters per line
@@ -35,9 +36,10 @@ SUBTITLE_CONFIGS = {
         'back_color': '&H000000',  # Black shadow
         'secondary_color': '&HFFFFFF',  # Secondary color
         'shadow_offset': 4,  # Shadow offset
-        'text_position': 500,  # Position from top in pixels
-        'alignment': 8,  # Top center alignment
+        'text_position': 162,  # 15% from bottom on 1080 height
+        'alignment': 2,  # Bottom center alignment
         'bold': 1,  # Bold text
+        'outline': 3,  # ClipGenius uses 3
             'logo': {
                 'url': {
                         'calf': 'https://calfkicker.com/wp-content/uploads/2023/12/calfkicker_new_font.png',
@@ -52,7 +54,7 @@ SUBTITLE_CONFIGS = {
 
     'square': {
         'font': 'The Bold Font',
-        'fontsize': 40,  # Font size for better visibility
+        'fontsize': 60,  # Match ClipGenius ratio for 1080x1080
         'color': '&HFFFFFF',  # White text
         'highlight_color': '&H00FFFF',  # Yellow highlight
         'max_chars': 30,  # Maximum characters per line
@@ -60,9 +62,10 @@ SUBTITLE_CONFIGS = {
         'back_color': '&H000000',  # Black shadow
         'secondary_color': '&HFFFFFF',  # Secondary color
         'shadow_offset': 4,  # Shadow offset
-        'text_position': 500,  # Position from top in pixels
-        'alignment': 8,  # Top center alignment
+        'text_position': 162,  # 15% from bottom on 1080 height
+        'alignment': 2,  # Bottom center alignment
         'bold': 1,  # Bold text
+        'outline': 3,  # ClipGenius uses 3
         'logo': {
             'url': {
                     'calf': 'https://calfkicker.com/wp-content/uploads/2023/12/calfkicker_new_font.png',

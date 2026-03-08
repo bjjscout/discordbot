@@ -25,7 +25,7 @@ from subtitle_config import SUBTITLE_CONFIGS
 
 # Video dimensions for each format (for ASS PlayRes scaling)
 FORMAT_DIMENSIONS = {
-    "reel": (540, 960),      # 9:16 vertical
+    "reel": (1080, 1920),    # 9:16 vertical - matching ClipGenius
     "square": (1080, 1080),  # 1:1
     "landscape": (1920, 1080),  # 16:9
 }
@@ -544,12 +544,13 @@ class VideoCog(commands.Cog):
                         
                         transcription = await self.whisperx.transcribe(
                             current_video_url, 
-                            task="translate", 
+                            task="transcribe", 
                             progress_callback=progress_callback,
                             font_name=config.get('font', 'Arial'),
                             font_size=config.get('fontsize'),
                             font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
                             font_bold=config.get('bold', 0),
+                            font_text_position=config.get('text_position'),
                             video_width=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[0],
                             video_height=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[1]
                         )

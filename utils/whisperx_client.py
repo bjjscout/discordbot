@@ -260,6 +260,7 @@ class WhisperXClient:
         font_size: int = None,
         font_color: str = None,
         font_bold: int = None,
+        font_text_position: int = None,
         # Video dimensions for ASS PlayRes
         video_width: int = None,
         video_height: int = None,
@@ -277,6 +278,7 @@ class WhisperXClient:
             font_size: Custom font size for ASS subtitles
             font_color: Custom font color (e.g., "&H00FFFFFF")
             font_bold: Font bold (0 or 1)
+            font_text_position: Text position from top in pixels
             
         Returns:
             TranscriptionResult with subtitle URLs
@@ -301,6 +303,8 @@ class WhisperXClient:
             data["font_color"] = font_color
         if font_bold is not None:
             data["font_bold"] = font_bold
+        if font_text_position is not None:
+            data["font_text_position"] = font_text_position
         # Add video dimensions
         if video_width is not None:
             data["video_width"] = video_width
