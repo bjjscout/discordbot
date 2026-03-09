@@ -312,7 +312,7 @@ class VideoCog(commands.Cog):
             # Step 1: Download video (if it's a social URL that needs downloading)
             if any(site in url for site in ['youtube.com', 'youtu.be', 'rumble.com', 'twitter.com', 'x.com', 'facebook.com', 'instagram.com']):
                 await self._send_message_with_rate_limit(ctx, "Downloading video...")
-                download_result = await self.whisperx.download_video(url, quality="best", progress_callback=progress_callback)
+                download_result = await self.whisperx.download_video(url, quality="720p", progress_callback=progress_callback)
                 current_video_url = download_result.video_url
                 await self._send_message_with_rate_limit(ctx, f"Downloaded: {download_result.title}")
             
@@ -496,7 +496,7 @@ class VideoCog(commands.Cog):
                     if any(site in url for site in ['youtube.com', 'youtu.be', 'rumble.com', 'twitter.com', 'x.com', 'facebook.com', 'instagram.com']):
                         await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Downloading...")
                         try:
-                            download_result = await self.whisperx.download_video(url, quality="best", progress_callback=progress_callback)
+                            download_result = await self.whisperx.download_video(url, quality="720p", progress_callback=progress_callback)
                             current_video_url = download_result.video_url
                             print(f"[DEBUG] Downloaded video URL: {current_video_url}")
                         except Exception as download_error:
