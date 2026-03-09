@@ -151,6 +151,15 @@ class WhisperXClient:
         Raises:
             Exception: If job fails
         """
+        # Handle cached video case - return mock completed status
+        if job_id == "cached":
+            logger.info("Video was cached, returning completed status")
+            return {
+                "job_id": "cached",
+                "status": "completed",
+                "cached": True
+            }
+
         import time
         last_progress_update = 0
         
