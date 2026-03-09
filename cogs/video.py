@@ -327,7 +327,15 @@ class VideoCog(commands.Cog):
             # Step 3: Reformat if needed
             if format and format != 'landscape':
                 await self._send_message_with_rate_limit(ctx, f"Reformatting to {format}...")
-                reformat_result = await self.whisperx.reformat_video(current_video_url, format=format, progress_callback=progress_callback)
+                # Enable face tracking for reel format
+                face_tracking = format.lower() == 'reel'
+                reformat_result = await self.whisperx.reformat_video(
+                    current_video_url, 
+                    format=format, 
+                    fill_mode="crop",
+                    face_tracking=face_tracking,
+                    progress_callback=progress_callback
+                )
                 current_video_url = reformat_result.output_url
             
             # Step 4: Add logo if provided
@@ -506,7 +514,15 @@ class VideoCog(commands.Cog):
                     # Step 3: Reformat if needed
                     if format_type and format_type != 'landscape':
                         await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Reformatting to {format_type}...")
-                        reformat_result = await self.whisperx.reformat_video(current_video_url, format=format_type, progress_callback=progress_callback)
+                        # Enable face tracking for reel format
+                        face_tracking = format_type.lower() == 'reel'
+                        reformat_result = await self.whisperx.reformat_video(
+                            current_video_url, 
+                            format=format_type, 
+                            fill_mode="crop",
+                            face_tracking=face_tracking,
+                            progress_callback=progress_callback
+                        )
                         current_video_url = reformat_result.output_url
                     
                     # Step 4: Add logo if needed

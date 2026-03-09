@@ -376,6 +376,7 @@ class WhisperXClient:
         video_url: str,
         format: str,
         fill_mode: str = "pad",
+        face_tracking: bool = False,
         progress_callback=None
     ) -> FFmpegResult:
         """
@@ -387,12 +388,13 @@ class WhisperXClient:
             video_url: URL to the video
             format: Target format ("landscape", "reel", "square")
             fill_mode: How to fill ("crop", "pad", "blur_background")
+            face_tracking: Enable face tracking for reel format (smart crop around faces)
             progress_callback: Optional async callback for progress updates
             
         Returns:
             FFmpegResult with output URL
         """
-        logger.info(f"Reformatting video to {format} (fill_mode={fill_mode}): {video_url}")
+        logger.info(f"Reformatting video to {format} (fill_mode={fill_mode}, face_tracking={face_tracking}): {video_url}")
         
         # Validate format
         valid_formats = ["landscape", "reel", "square"]
@@ -404,7 +406,8 @@ class WhisperXClient:
             "url": video_url,
             "operation": "reformat",
             "format": format,
-            "fill_mode": fill_mode
+            "fill_mode": fill_mode,
+            "face_tracking": face_tracking
         }
         
         job_id = await self._submit_job("/ffmpeg", data)
