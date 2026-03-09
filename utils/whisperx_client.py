@@ -151,15 +151,6 @@ class WhisperXClient:
         Raises:
             Exception: If job fails
         """
-        # Handle cached video case - return mock completed status
-        if job_id == "cached":
-            logger.info("Video was cached, returning completed status")
-            return {
-                "job_id": "cached",
-                "status": "completed",
-                "cached": True
-            }
-
         import time
         last_progress_update = 0
         
@@ -224,32 +215,49 @@ class WhisperXClient:
         }
         
         try:
-            job_id = await self._submit_job("/download", data)
-            logger.info(f"Download job submitted: {job_id}")
-            result = await self._wait_for_job(job_id, progress_callback)
+            # Submit job and get initial response
+            session = await self._get_session()
+            async with session.post(f"{self.base_url}/download", data=data) as response:
+                response.raise_for_status()
+                result = await response.json()
             
-            logger.info(f"Download job completed: {job_id}")
+            job_id = result.get("job_id")
+            logger.info(f"Download job submitted: {job_id}")
+            
+            # Handle cached video case - result is in the response
+            if job_id == "cached":
+                logger.info("Video was cached, using cached result")
+                download_result = result  # API returns video_url at top level for cached
+            else:
+                # Wait for job to complete
+                result = await self._wait_for_job(job_id, progress_callback)
+                logger.info(f"Download job completed: {job_id}")
+                download_result = result.get("result")
             
             # Debug: print the result
-            logger.debug(f"Download result keys: {result.keys() if isinstance(result, dict) else 'not a dict'}")
+            logger.debug(f"Download result keys: {download_result.keys() if isinstance(download_result, dict) else 'not a dict'}")
             
-            download_result = result.get("result")
             if not download_result:
                 # Check if there's an error
-                error = result.get("error")
+                error = result.get("error") if isinstance(result, dict) else None
                 raise Exception(f"Download failed: {error or 'Unknown error - no result returned'}")
+            
+            # Get video_url - may be at top level (cached) or in result
+            video_url = download_result.get("video_url")
+            if not video_url:
+                raise Exception("Download failed: No video_url in result")
             
             # Debug: print download_result
             logger.debug(f"Download result: {download_result}")
             
             return DownloadResult(
-                video_url=download_result["video_url"],
+                video_url=video_url,
                 audio_url=download_result.get("audio_url"),
-                duration=download_result["duration"],
-                width=download_result["width"],
-                height=download_result["height"],
-                format=download_result["format"],
-                title=download_result["title"]
+                duration=download_result.get("duration", 0),
+                width=download_result.get("width", 0),
+                height=download_result.get("height", 0),
+                format=download_result.get("format", ""),
+                title=download_result.get("title", "")
             )
         except Exception as e:
             logger.error(f"Download error: {str(e)}")
