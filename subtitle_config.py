@@ -36,7 +36,7 @@ SUBTITLE_CONFIGS = {
         'back_color': '&H000000',  # Black shadow
         'secondary_color': '&HFFFFFF',  # Secondary color
         'shadow_offset': 4,  # Shadow offset
-        'text_position': 162,  # 15% from bottom on 1080 height
+        'text_position': 80,  # Higher position - 7% from bottom on 1080 height
         'alignment': 2,  # Bottom center alignment
         'bold': 1,  # Bold text
         'outline': 3,  # ClipGenius uses 3
@@ -62,7 +62,7 @@ SUBTITLE_CONFIGS = {
         'back_color': '&H000000',  # Black shadow
         'secondary_color': '&HFFFFFF',  # Secondary color
         'shadow_offset': 4,  # Shadow offset
-        'text_position': 162,  # 15% from bottom on 1080 height
+        'text_position': 80,  # Higher position - 7% from bottom on 1080 height
         'alignment': 2,  # Bottom center alignment
         'bold': 1,  # Bold text
         'outline': 3,  # ClipGenius uses 3
