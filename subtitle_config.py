@@ -28,7 +28,7 @@ SUBTITLE_CONFIGS = {
 
     'landscape': {
         'font': 'The Bold Font',
-        'fontsize': 80,  # Match ClipGenius ratio for 1080 height
+        'fontsize': 120,  # Larger for better visibility on 1080p
         'color': '&HFFFFFF',  # White text
         'highlight_color': '&H00FFFF',  # Yellow highlight
         'max_chars': 30,  # Maximum characters per line
@@ -54,7 +54,7 @@ SUBTITLE_CONFIGS = {
 
     'square': {
         'font': 'The Bold Font',
-        'fontsize': 60,  # Match ClipGenius ratio for 1080x1080
+        'fontsize': 100,  # Larger for better visibility on 1080x1080
         'color': '&HFFFFFF',  # White text
         'highlight_color': '&H00FFFF',  # Yellow highlight
         'max_chars': 30,  # Maximum characters per line
