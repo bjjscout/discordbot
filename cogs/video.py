@@ -327,15 +327,33 @@ class VideoCog(commands.Cog):
             # Step 3: Reformat if needed
             if format and format != 'landscape':
                 await self._send_message_with_rate_limit(ctx, f"Reformatting to {format}...")
-                # Enable face tracking for reel format
-                face_tracking = format.lower() == 'reel'
-                reformat_result = await self.whisperx.reformat_video(
-                    current_video_url, 
-                    format=format, 
-                    fill_mode="crop",
-                    face_tracking=face_tracking,
-                    progress_callback=progress_callback
-                )
+                # Enable face tracking for reel format (unless disabled via env var)
+                import os
+                face_tracking_enabled = os.environ.get('ENABLE_FACE_TRACKING', 'true').lower() == 'true'
+                face_tracking = format.lower() == 'reel' and face_tracking_enabled
+                
+                try:
+                    reformat_result = await self.whisperx.reformat_video(
+                        current_video_url, 
+                        format=format, 
+                        fill_mode="crop",
+                        face_tracking=face_tracking,
+                        progress_callback=progress_callback
+                    )
+                except TimeoutError as e:
+                    # If face tracking times out, retry without it
+                    if face_tracking:
+                        await self._send_message_with_rate_limit(ctx, "Face tracking timed out, retrying without it...")
+                        reformat_result = await self.whisperx.reformat_video(
+                            current_video_url, 
+                            format=format, 
+                            fill_mode="crop",
+                            face_tracking=False,
+                            progress_callback=progress_callback
+                        )
+                    else:
+                        raise
+                
                 current_video_url = reformat_result.output_url
             
             # Step 4: Add logo if provided
@@ -421,8 +439,8 @@ class VideoCog(commands.Cog):
 
     @commands.command(name='process_sheet', help='Download/trim/transcribe videos from social links (takes direct video DL links also) in Google Sheet')
     async def process_sheet_command(self, ctx):
-        """Process videos from Google Sheet using the WhisperX API (orchestrator mode)."""
-        await self._send_message_with_rate_limit(ctx, "Starting to process the Google Sheet via API... This may take a while.")
+        """Process videos from Google Sheet using the WhisperX API (PARALLEL MODE)."""
+        await self._send_message_with_rate_limit(ctx, "Starting to process the Google Sheet via API (PARALLEL MODE)... This may take a while.")
         
         # Progress callback - only send updates every 60 seconds to avoid spam
         last_progress_update = 0
@@ -464,149 +482,193 @@ class VideoCog(commands.Cog):
                 await self._send_message_with_rate_limit(ctx, "No data found in the Google Sheet.")
                 return
             
-            await self._send_message_with_rate_limit(ctx, f"Found {len(values)} rows to process")
+            await self._send_message_with_rate_limit(ctx, f"Found {len(values)} rows to process (PARALLEL MODE)")
             
-            # Process each row
-            for row_index, row in enumerate(values, start=2):
-                if not row or not row[0].strip():
-                    continue
-                    
-                # Check if already processed
-                if len(row) >= 8 and row[7].lower() == 'y':
-                    await self._send_message_with_rate_limit(ctx, f"Skipping row {row_index}: Already processed")
-                    continue
+            # Semaphore to limit concurrent processing
+            max_concurrent = 3  # Process up to 3 videos simultaneously
+            semaphore = asyncio.Semaphore(max_concurrent)
+            
+            async def process_row_parallel(row_index, row, sheet, service, progress_callback):
+                """Process a single row - designed to run in parallel."""
+                import os
                 
-                url = row[0]
-                format_type = row[1] if len(row) > 1 else 'landscape'
-                transcribe = row[2] if len(row) > 2 else 'n'
-                start = row[3] if len(row) > 3 and row[3] else None
-                end = row[4] if len(row) > 4 and row[4] else None
-                logo_type = row[5] if len(row) > 5 else ''
-                no_loop = len(row) > 8 and row[8].lower() == 'y'
-                
-                await self._send_message_with_rate_limit(ctx, f"Processing row {row_index}: {url[:50]}...")
-                
-                try:
-                    current_video_url = url
+                async with semaphore:
+                    if not row or not row[0].strip():
+                        return None
                     
-                    # Debug: Print what we're about to process
-                    print(f"[DEBUG] Row {row_index}: URL={url}, format={format_type}, transcribe={transcribe}, start={start}, end={end}, logo={logo_type}")
+                    # Check if already processed
+                    if len(row) >= 8 and row[7].lower() == 'y':
+                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Already processed - skipping")
+                        return None
                     
-                    # Step 1: Download video
-                    if any(site in url for site in ['youtube.com', 'youtu.be', 'rumble.com', 'twitter.com', 'x.com', 'facebook.com', 'instagram.com']):
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Downloading...")
-                        try:
-                            download_result = await self.whisperx.download_video(url, quality="720p", progress_callback=progress_callback)
-                            current_video_url = download_result.video_url
-                            print(f"[DEBUG] Downloaded video URL: {current_video_url}")
-                        except Exception as download_error:
-                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Download failed - {str(download_error)}")
-                            continue
+                    url = row[0]
+                    format_type = row[1] if len(row) > 1 else 'landscape'
+                    transcribe = row[2] if len(row) > 2 else 'n'
+                    start = row[3] if len(row) > 3 and row[3] else None
+                    end = row[4] if len(row) > 4 and row[4] else None
+                    logo_type = row[5] if len(row) > 5 else ''
+                    no_loop = len(row) > 8 and row[8].lower() == 'y'
                     
-                    # Step 2: Trim if needed
-                    if start or end:
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Trimming...")
-                        start_sec = self._time_to_seconds(start) if start else 0
-                        end_sec = self._time_to_seconds(end) if end else None
-                        trim_result = await self.whisperx.trim_video(current_video_url, start=start_sec, end=end_sec, progress_callback=progress_callback)
-                        current_video_url = trim_result.output_url
+                    await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Starting - {url[:50]}...")
                     
-                    # Step 3: Reformat if needed
-                    if format_type and format_type != 'landscape':
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Reformatting to {format_type}...")
-                        # Enable face tracking for reel format
-                        face_tracking = format_type.lower() == 'reel'
-                        reformat_result = await self.whisperx.reformat_video(
-                            current_video_url, 
-                            format=format_type, 
-                            fill_mode="crop",
-                            face_tracking=face_tracking,
-                            progress_callback=progress_callback
-                        )
-                        current_video_url = reformat_result.output_url
-                    
-                    # Step 4: Add logo if needed
-                    if logo_type:
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Adding logo...")
-                        # Get logo URL from subtitle_config
-                        config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
-                        logo_config = config.get('logo', {})
-                        logo_url = logo_config.get('url', {}).get(logo_type.lower())
+                    try:
+                        current_video_url = url
                         
-                        if logo_url:
-                            position = "top-center"
-                            opacity = logo_config.get('opacity', 0.8)
-                            scale = logo_config.get('size_factor', 0.2)
+                        # Debug: Print what we're about to process
+                        print(f"[DEBUG] Row {row_index}: URL={url}, format={format_type}, transcribe={transcribe}, start={start}, end={end}, logo={logo_type}")
+                        
+                        # Step 1: Download video
+                        if any(site in url for site in ['youtube.com', 'youtu.be', 'rumble.com', 'twitter.com', 'x.com', 'facebook.com', 'instagram.com']):
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Downloading...")
+                            try:
+                                download_result = await self.whisperx.download_video(url, quality="720p", progress_callback=progress_callback)
+                                current_video_url = download_result.video_url
+                                print(f"[DEBUG] Row {row_index}: Downloaded video URL: {current_video_url}")
+                            except Exception as download_error:
+                                await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Download failed - {str(download_error)}")
+                                return {'row_index': row_index, 'error': str(download_error)}
+                        
+                        # Step 2: Trim if needed
+                        if start or end:
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Trimming...")
+                            start_sec = self._time_to_seconds(start) if start else 0
+                            end_sec = self._time_to_seconds(end) if end else None
+                            trim_result = await self.whisperx.trim_video(current_video_url, start=start_sec, end=end_sec, progress_callback=progress_callback)
+                            current_video_url = trim_result.output_url
+                        
+                        # Step 3: Reformat if needed
+                        if format_type and format_type != 'landscape':
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Reformatting to {format_type}...")
+                            # Enable face tracking for reel format (unless disabled via env var)
+                            face_tracking_enabled = os.environ.get('ENABLE_FACE_TRACKING', 'true').lower() == 'true'
+                            face_tracking = format_type.lower() == 'reel' and face_tracking_enabled
                             
-                            overlay_result = await self.whisperx.add_overlay(
+                            try:
+                                reformat_result = await self.whisperx.reformat_video(
+                                    current_video_url, 
+                                    format=format_type, 
+                                    fill_mode="crop",
+                                    face_tracking=face_tracking,
+                                    progress_callback=progress_callback
+                                )
+                            except TimeoutError as e:
+                                # If face tracking times out, retry without it
+                                if face_tracking:
+                                    await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Face tracking timed out, retrying without it...")
+                                    reformat_result = await self.whisperx.reformat_video(
+                                        current_video_url, 
+                                        format=format_type, 
+                                        fill_mode="crop",
+                                        face_tracking=False,
+                                        progress_callback=progress_callback
+                                    )
+                                else:
+                                    raise
+                            
+                            current_video_url = reformat_result.output_url
+                        
+                        # Step 4: Add logo if needed
+                        if logo_type:
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Adding logo...")
+                            # Get logo URL from subtitle_config
+                            config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                            logo_config = config.get('logo', {})
+                            logo_url = logo_config.get('url', {}).get(logo_type.lower())
+                            
+                            if logo_url:
+                                position = "top-center"
+                                opacity = logo_config.get('opacity', 0.8)
+                                scale = logo_config.get('size_factor', 0.2)
+                                
+                                overlay_result = await self.whisperx.add_overlay(
+                                    current_video_url, 
+                                    logo_url, 
+                                    position=position,
+                                    opacity=opacity,
+                                    scale=scale,
+                                    progress_callback=progress_callback
+                                )
+                                current_video_url = overlay_result.output_url
+                            else:
+                                await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Warning - No logo URL for type {logo_type}")
+                        
+                        # Step 5: Transcribe if needed
+                        combined_urls = None
+                        if transcribe.lower() == 'y':
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Transcribing...")
+                            
+                            # Get font config from subtitle_config for the format
+                            config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                            
+                            transcription = await self.whisperx.transcribe(
                                 current_video_url, 
-                                logo_url, 
-                                position=position,
-                                opacity=opacity,
-                                scale=scale,
-                                progress_callback=progress_callback
+                                task="transcribe", 
+                                progress_callback=progress_callback,
+                                font_name=config.get('font', 'Arial'),
+                                font_size=config.get('fontsize'),
+                                font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
+                                font_bold=config.get('bold', 0),
+                                font_text_position=config.get('text_position'),
+                                video_width=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[0],
+                                video_height=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[1]
                             )
-                            current_video_url = overlay_result.output_url
-                        else:
-                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Warning - No logo URL for type {logo_type}")
-                    
-                    # Step 5: Transcribe if needed
-                    combined_urls = None
-                    if transcribe.lower() == 'y':
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Transcribing...")
+                            
+                            await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Burning subtitles...")
+                            # Use ASS subtitles for better burning results with styling
+                            burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.ass_url, progress_callback=progress_callback)
+                            current_video_url = burn_result.output_url
+                            
+                            combined_urls = f"TXT: {transcription.txt_url}\nSRT: {transcription.srt_url}\nASS: {transcription.ass_url}"
                         
-                        # Get font config from subtitle_config for the format
-                        config = SUBTITLE_CONFIGS.get(format_type, SUBTITLE_CONFIGS['landscape'])
+                        # Step 6: Loop if needed (skip for now - need duration info)
                         
-                        transcription = await self.whisperx.transcribe(
-                            current_video_url, 
-                            task="transcribe", 
-                            progress_callback=progress_callback,
-                            font_name=config.get('font', 'Arial'),
-                            font_size=config.get('fontsize'),
-                            font_color=config.get('color', '&HFFFFFF').replace('#', '&H'),
-                            font_bold=config.get('bold', 0),
-                            font_text_position=config.get('text_position'),
-                            video_width=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[0],
-                            video_height=FORMAT_DIMENSIONS.get(format_type, (1920, 1080))[1]
-                        )
-                        
-                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Burning subtitles...")
-                        # Use ASS subtitles for better burning results with styling
-                        burn_result = await self.whisperx.burn_subtitles(current_video_url, transcription.ass_url, progress_callback=progress_callback)
-                        current_video_url = burn_result.output_url
-                        
-                        combined_urls = f"TXT: {transcription.txt_url}\nSRT: {transcription.srt_url}\nASS: {transcription.ass_url}"
-                    
-                    # Step 6: Loop if needed (skip for now - need duration info)
-                    
-                    # Update sheet with result
-                    update_range = f"vidclipper!G{row_index}:H{row_index}"
-                    update_body = {
-                        'values': [[current_video_url, 'y']]
-                    }
-                    
-                    if combined_urls:
-                        update_range_v = f"vidclipper!X{row_index}:X{row_index}"
-                        update_body_v = {
-                            'values': [[combined_urls]]
+                        # Update sheet with result
+                        update_range = f"vidclipper!G{row_index}:H{row_index}"
+                        update_body = {
+                            'values': [[current_video_url, 'y']]
                         }
-                        sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range_v, valueInputOption='RAW', body=update_body_v).execute()
-                    
-                    sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range, valueInputOption='RAW', body=update_body).execute()
-                    
-                    await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Completed!")
-                    
-                except Exception as row_error:
-                    await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Error - {str(row_error)}")
-                    # Update sheet with error
-                    update_range = f"vidclipper!G{row_index}:H{row_index}"
-                    update_body = {
-                        'values': [['', str(row_error)]]
-                    }
-                    sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range, valueInputOption='RAW', body=update_body).execute()
+                        
+                        if combined_urls:
+                            update_range_v = f"vidclipper!X{row_index}:X{row_index}"
+                            update_body_v = {
+                                'values': [[combined_urls]]
+                            }
+                            sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range_v, valueInputOption='RAW', body=update_body_v).execute()
+                        
+                        sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range, valueInputOption='RAW', body=update_body).execute()
+                        
+                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Completed!")
+                        return {'row_index': row_index, 'success': True, 'video_url': current_video_url}
+                        
+                    except Exception as row_error:
+                        await self._send_message_with_rate_limit(ctx, f"Row {row_index}: Error - {str(row_error)}")
+                        # Update sheet with error
+                        update_range = f"vidclipper!G{row_index}:H{row_index}"
+                        update_body = {
+                            'values': [['', str(row_error)]]
+                        }
+                        sheet.values().update(spreadsheetId=SPREADSHEET_ID, range=update_range, valueInputOption='RAW', body=update_body).execute()
+                        return {'row_index': row_index, 'error': str(row_error)}
             
-            await self._send_message_with_rate_limit(ctx, "Google Sheet processing completed successfully!")
+            # Process all rows in parallel with semaphore limiting concurrency
+            tasks = []
+            for row_index, row in enumerate(values, start=2):
+                tasks.append(process_row_parallel(row_index, row, sheet, service, progress_callback))
+            
+            # Run all tasks concurrently
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Count successes and failures
+            successes = 0
+            failures = 0
+            for r in results:
+                if r and isinstance(r, dict):
+                    if r.get('success'):
+                        successes += 1
+                    elif r.get('error'):
+                        failures += 1
+            
+            await self._send_message_with_rate_limit(ctx, f"Google Sheet processing completed! Success: {successes}, Failed: {failures}")
             
         except Exception as e:
             await self._send_message_with_rate_limit(ctx, f"An error occurred while processing the Google Sheet: {str(e)}")

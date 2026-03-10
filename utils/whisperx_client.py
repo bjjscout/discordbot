@@ -98,67 +98,104 @@ class WhisperXClient:
         if self._session and not self._session.closed:
             await self._session.close()
     
-    async def _submit_job(self, endpoint: str, data: Dict[str, Any]) -> str:
+    async def _submit_job(self, endpoint: str, data: Dict[str, Any], max_retries: int = 3) -> str:
         """
-        Submit a job to the API and return the job_id.
+        Submit a job to the API and return the job_id with retry logic.
         
         Args:
             endpoint: API endpoint (e.g., "/transcribe/url", "/download", "/ffmpeg")
             data: Form data to submit
+            max_retries: Number of retries for transient errors (default: 3)
             
         Returns:
             job_id string
         """
+        import aiohttp
+        import asyncio
+        
         session = await self._get_session()
         
-        async with session.post(f"{self.base_url}{endpoint}", data=data) as response:
-            response.raise_for_status()
-            result = await response.json()
-            
-            if "job_id" not in result:
-                raise ValueError(f"No job_id in response: {result}")
-            
-            logger.info(f"Submitted job to {endpoint}: {result['job_id']}")
-            return result["job_id"]
+        for attempt in range(max_retries):
+            try:
+                async with session.post(f"{self.base_url}{endpoint}", data=data) as response:
+                    response.raise_for_status()
+                    result = await response.json()
+                    
+                    if "job_id" not in result:
+                        raise ValueError(f"No job_id in response: {result}")
+                    
+                    logger.info(f"Submitted job to {endpoint}: {result['job_id']}")
+                    return result["job_id"]
+            except aiohttp.ClientResponseError as e:
+                # Retry on transient HTTP errors (502, 503, 504)
+                if e.status in [502, 503, 504] and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"Got {e.status} error submitting job to {endpoint}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    raise
     
-    async def _poll_job(self, job_id: str) -> Dict[str, Any]:
+    async def _poll_job(self, job_id: str, max_retries: int = 3) -> Dict[str, Any]:
         """
-        Poll for job status.
+        Poll for job status with retry logic for transient errors.
         
         Args:
             job_id: The job ID to poll
+            max_retries: Number of retries for transient errors (default: 3)
             
         Returns:
             Full job status response
         """
+        import aiohttp
+        import asyncio
+        
         session = await self._get_session()
         
-        async with session.get(f"{self.base_url}/jobs/{job_id}") as response:
-            response.raise_for_status()
-            return await response.json()
+        for attempt in range(max_retries):
+            try:
+                async with session.get(f"{self.base_url}/jobs/{job_id}") as response:
+                    response.raise_for_status()
+                    return await response.json()
+            except aiohttp.ClientResponseError as e:
+                # Retry on transient HTTP errors (502, 503, 504)
+                if e.status in [502, 503, 504] and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"Got {e.status} error polling job {job_id}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    raise
     
-    async def _wait_for_job(self, job_id: str, progress_callback=None) -> Dict[str, Any]:
+    async def _wait_for_job(self, job_id: str, progress_callback=None, timeout: int = 1800) -> Dict[str, Any]:
         """
         Wait for a job to complete, polling at regular intervals.
         
         Args:
             job_id: The job ID to wait for
             progress_callback: Optional async callback(status) for progress updates
+            timeout: Maximum time to wait in seconds (default: 30 minutes)
             
         Returns:
             Completed job result
             
         Raises:
-            Exception: If job fails
+            Exception: If job fails or times out
         """
         import time
         last_progress_update = 0
+        start_time = time.time()
         
         while True:
+            # Check for timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                raise TimeoutError(f"Job {job_id} timed out after {timeout} seconds")
+            
             status = await self._poll_job(job_id)
             job_status = status.get("status")
             
-            # Only send progress updates every 60 seconds to avoid spam
+            # Send progress updates every 60 seconds
             if progress_callback:
                 current_time = time.time()
                 if current_time - last_progress_update > 60:
