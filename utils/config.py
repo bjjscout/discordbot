@@ -121,11 +121,15 @@ class Settings(BaseModel):
     rapidapi_key: str = Field(default="", alias="RAPIDAPI_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
     fal_key: str = Field(default="", alias="FAL_KEY")
     
     # Webhooks
     make_webhook_url: str = Field(default="", alias="MAKE_WEBHOOK_URL")
     tweet_webhook_url: str = Field(default="", alias="TWEET_WEBHOOK_URL")
+    
+    # WhisperX API
+    whisperx_api_url: str = Field(default="https://whisperx.jeffrey-epstein.com", alias="WHISPERX_API_URL")
     
     # Paths (with Docker-friendly defaults)
     ffmpeg_path: str = Field(default="ffmpeg")
