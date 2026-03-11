@@ -42,3 +42,9 @@ lxml>=5.0.0
 
 # Logging
 PyYAML>=6.0.0
+
+# YouTube Transcript API (primary transcript method)
+youtube-transcript-api>=0.6.0
+
+# YouTube video downloading (secondary transcript fallback)
+yt-dlp>=2024.0.0

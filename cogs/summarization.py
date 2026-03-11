@@ -28,6 +28,7 @@ import traceback
 import re
 import time
 import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
@@ -78,6 +79,30 @@ async def get_video_title(url: str) -> str:
     except:
         pass
     return f"Video {video_id}"
+
+
+def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
+    """
+    Fetch transcript using YouTube Transcript API.
+    
+    Returns: (transcript_text, source)
+    """
+    video_id = get_video_id(youtube_url)
+    if not video_id:
+        return None, "YouTube API failed"
+    
+    try:
+        ytt_api = YouTubeTranscriptApi()
+        fetched_transcript = ytt_api.fetch(video_id)
+        
+        # Convert to plain text
+        transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
+        
+        return transcript_text, "YouTube API"
+        
+    except Exception as e:
+        print(f"YouTube Transcript API error: {e}", file=sys.stderr)
+        return None, "YouTube API failed"
 
 
 def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
@@ -222,13 +247,23 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
 
 def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
-    Get transcript - tries yt-dlp first, then falls back to WhisperX.
+    Get transcript - tries YouTube Transcript API first, then yt-dlp, then WhisperX.
     
     Returns: (transcript_text, source)
     """
-    # 1. Try yt-dlp first (faster, free, gets subtitles directly)
+    # 1. Try YouTube Transcript API first
     if progress_callback:
-        progress_callback("Trying to get transcript with yt-dlp...")
+        progress_callback("Trying to get transcript with YouTube Transcript API...")
+    
+    transcript, source = _fetch_transcript_youtube_api(youtube_url)
+    if transcript:
+        if progress_callback:
+            progress_callback("Got transcript from YouTube Transcript API!")
+        return transcript, source
+    
+    # 2. Fall back to yt-dlp if YouTube API failed
+    if progress_callback:
+        progress_callback("YouTube Transcript API failed. Trying yt-dlp...")
     
     transcript, source = _fetch_transcript_ytdlp(youtube_url)
     if transcript:
@@ -236,7 +271,7 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
             progress_callback("Got transcript from yt-dlp!")
         return transcript, source
     
-    # 2. Fall back to WhisperX API if yt-dlp failed
+    # 3. Fall back to WhisperX API if both failed
     if progress_callback:
         progress_callback("yt-dlp failed. Trying WhisperX...")
     
