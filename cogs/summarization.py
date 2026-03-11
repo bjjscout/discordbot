@@ -4,7 +4,7 @@ Summarization Cog - YouTube Video Summarization Commands
 Provides commands for summarizing YouTube videos using:
 - WhisperX API for transcription (Docker deployment)
 - OpenAI GPT for summarization
-- Anthropic Claude for summarization
+- Anthropic Claude for summarization (via wrapper API)
 
 Commands:
 - !sumw - Whisper transcription + basic summary
@@ -186,10 +186,10 @@ Summary:"""
 
 
 def _summarize_with_anthropic(transcript: str, video_title: str = "", model: str = "claude-sonnet-4-20250514") -> Optional[str]:
-    """Summarize transcript using Anthropic Claude"""
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return None
+    """Summarize transcript using Anthropic Claude via wrapper API"""
+    # Use wrapper API first, fall back to direct API
+    wrapper_url = "https://claudeapi.jeffrey-epstein.com/generate"
+    wrapper_key = "jiujitsu2020"
     
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
 Provide a concise but comprehensive summary of the key points covered in the video.
@@ -202,6 +202,31 @@ Format the summary in a clear, readable way with bullet points or sections."""
 
 Summary:"""
 
+    # Try wrapper API first
+    try:
+        response = requests.post(
+            wrapper_url,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": wrapper_key
+            },
+            json={
+                "prompt": user_prompt,
+                "system_prompt": system_prompt,
+                "model": model if model else None
+            },
+            timeout=120
+        )
+        response.raise_for_status()
+        return response.json().get('result')
+    except Exception as e:
+        print(f"Wrapper API failed: {e}. Trying direct Anthropic API...", file=sys.stderr)
+    
+    # Fall back to direct Anthropic API
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    
     try:
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -211,7 +236,7 @@ Summary:"""
                 "Content-Type": "application/json"
             },
             json={
-                "model": model,
+                "model": "claude-sonnet-4-6",
                 "max_tokens": 2000,
                 "system": system_prompt,
                 "messages": [
@@ -395,11 +420,6 @@ class SummarizationCog(commands.Cog):
         """Summarize using Anthropic Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
-            return
-        
-        # Check API key
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            await ctx.send("❌ Anthropic API key not configured. Please set ANTHROPIC_API_KEY in .env")
             return
         
         await ctx.send(f"📝 Processing: {youtube_url}\n⏳ Transcribing with WhisperX...")
