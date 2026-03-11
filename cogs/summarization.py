@@ -8,8 +8,10 @@ Provides commands for summarizing YouTube videos using:
 
 Commands:
 - !sumw - Uses Whisper first, then Claude
-- !sum  - Try YouTube transcript first, fallback to Whisper, then OpenAI
-- !sum2 - Try YouTube transcript first, fallback to Whisper, then Claude
+- !sum  - Uses WhisperX, then OpenAI
+- !sum2 - Uses WhisperX, then Claude
+
+Note: youtube_transcript_api removed - using WhisperX directly for transcription
 """
 
 import discord
@@ -72,28 +74,6 @@ async def get_video_title(url: str) -> str:
     except:
         pass
     return f"Video {video_id}"
-
-
-def _fetch_transcript_youtube_api(video_id: str) -> Optional[tuple]:
-    """Try to fetch transcript using YouTube Transcript API"""
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi
-        from youtube_transcript_api.formatters import SRTFormatter
-        
-        ytt_api = YouTubeTranscriptApi()
-        fetched_transcript = ytt_api.fetch(video_id)
-        
-        # Format as SRT
-        formatter = SRTFormatter()
-        srt_transcript = formatter.format_transcript(fetched_transcript)
-        
-        # Plain text
-        plain_transcript = ' '.join([entry.text for entry in fetched_transcript])
-        
-        return srt_transcript, plain_transcript, "YouTube API"
-    except Exception as e:
-        print(f"YouTube Transcript API failed: {e}", file=sys.stderr)
-        return None
 
 
 def _submit_transcription_job(video_url: str) -> Optional[str]:
@@ -162,28 +142,15 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
     return _poll_transcription_job(job_id)
 
 
-def _get_transcript(video_id: str, youtube_url: str, progress_callback=None) -> tuple:
+def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
-    Try to get transcript in order:
-    1. YouTube Transcript API
-    2. WhisperX (fallback)
+    Get transcript using WhisperX API directly
     
     Returns: (transcript_text, source)
     """
-    # 1. Try YouTube Transcript API
+    # Use WhisperX directly (youtube_transcript_api not available in Docker)
     if progress_callback:
-        progress_callback("Trying YouTube Transcript API...")
-    
-    result = _fetch_transcript_youtube_api(video_id)
-    if result:
-        srt, plain, source = result
-        if progress_callback:
-            progress_callback(f"Got transcript from {source}!")
-        return plain, source
-    
-    # 2. Fall back to WhisperX
-    if progress_callback:
-        progress_callback("Falling back to WhisperX...")
+        progress_callback("Transcribing with WhisperX...")
     
     whisper_result = _transcribe_with_whisperx(youtube_url)
     if whisper_result:
@@ -350,10 +317,10 @@ class SummarizationCog(commands.Cog):
             await ctx.send(f"📺 Video: {video_title}")
             await ctx.send("⏳ Transcribing with WhisperX...")
             
-            # !sumw uses Whisper FIRST (skip YouTube API)
+            # !sumw uses Whisper FIRST
             transcript, source = None, "Failed"
             
-            # Direct to WhisperX (like the old !sumw behavior)
+            # Direct to WhisperX
             whisper_result = await loop.run_in_executor(
                 _executor,
                 lambda: _transcribe_with_whisperx(youtube_url)
@@ -391,13 +358,13 @@ class SummarizationCog(commands.Cog):
 
     @commands.command(
         name='sum',
-        help='Try YouTube transcript first, fallback to Whisper, then OpenAI',
-        description='Try YouTube API, then Whisper, then OpenAI',
+        help='Use WhisperX for transcription, then OpenAI for summarization',
+        description='Use WhisperX, then OpenAI',
         usage='!sum <youtube_url>',
         brief='!sum <youtube_url>'
     )
     async def sum_command(self, ctx, youtube_url: str):
-        """!sum - Try YouTube transcript first, then OpenAI"""
+        """!sum - Use WhisperX, then OpenAI"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -420,10 +387,10 @@ class SummarizationCog(commands.Cog):
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
             
-            # Try transcript sources in order (YouTube API -> WhisperX)
+            # Use WhisperX directly for transcription
             transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _get_transcript(video_id, youtube_url)
+                lambda: _get_transcript(youtube_url)
             )
             
             if not transcript:
@@ -439,7 +406,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (YouTube/Whisper + OpenAI):**\n")
+                await ctx.send("✅ **Summary (Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -454,13 +421,13 @@ class SummarizationCog(commands.Cog):
 
     @commands.command(
         name='sum2',
-        help='Try YouTube transcript first, fallback to Whisper, then Claude',
-        description='Try YouTube API, then Whisper, then Claude',
+        help='Use WhisperX for transcription, then Claude for summarization',
+        description='Use WhisperX, then Claude',
         usage='!sum2 <youtube_url>',
         brief='!sum2 <youtube_url>'
     )
     async def sum2_command(self, ctx, youtube_url: str):
-        """!sum2 - Try YouTube transcript first, then Claude"""
+        """!sum2 - Use WhisperX, then Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -478,10 +445,10 @@ class SummarizationCog(commands.Cog):
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
             
-            # Try transcript sources in order (YouTube API -> WhisperX)
+            # Use WhisperX directly for transcription
             transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _get_transcript(video_id, youtube_url)
+                lambda: _get_transcript(youtube_url)
             )
             
             if not transcript:
@@ -497,7 +464,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (YouTube/Whisper + Claude):**\n")
+                await ctx.send("✅ **Summary (Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
