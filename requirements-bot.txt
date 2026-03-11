@@ -48,3 +48,6 @@ youtube-transcript-api>=0.6.0
 
 # YouTube video downloading (secondary transcript fallback)
 yt-dlp>=2024.0.0
+
+# SOCKS proxy support
+requests[socks]>=2.31.0

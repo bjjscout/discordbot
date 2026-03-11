@@ -91,8 +91,18 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
     if not video_id:
         return None, "YouTube API failed"
     
+    # Get proxy from environment or use default
+    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://gw.dataimpulse.com:10022")
+    
     try:
-        ytt_api = YouTubeTranscriptApi()
+        from youtube_transcript_api.proxies import GenericProxyConfig
+        
+        ytt_api = YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(
+                http_url=proxy_url,
+                https_url=proxy_url,
+            )
+        )
         fetched_transcript = ytt_api.fetch(video_id)
         
         # Convert to plain text
@@ -101,6 +111,11 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
         return transcript_text, "YouTube API"
         
     except Exception as e:
+        error_msg = str(e)
+        # Check if it's an IP block - if so, skip other YouTube methods too
+        if "cloud provider" in error_msg.lower() or "ip" in error_msg.lower() or "blocked" in error_msg.lower():
+            print(f"YouTube API blocked (IP issue): {e}", file=sys.stderr)
+            return None, "YouTube API blocked"
         print(f"YouTube Transcript API error: {e}", file=sys.stderr)
         return None, "YouTube API failed"
 
@@ -115,6 +130,9 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
     if not video_id:
         return None, "yt-dlp failed"
     
+    # Get proxy from environment or use default
+    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://gw.dataimpulse.com:10022")
+    
     ydl_opts = {
         'writesubtitles': True,
         'writeautomaticsub': True,
@@ -123,6 +141,8 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
         'outtmpl': f'/tmp/{video_id}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
+        'proxy': proxy_url,
+        'socket_timeout': 30,
     }
     
     try:
