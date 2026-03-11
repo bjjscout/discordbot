@@ -7,9 +7,9 @@ Provides commands for summarizing YouTube videos using:
 - Anthropic Claude for summarization (via wrapper API)
 
 Commands:
-- !sumw - Whisper transcription + basic summary
-- !sum  - OpenAI GPT-4o-mini summarization
-- !sum2 - Anthropic Claude Sonnet summarization
+- !sumw - Whisper transcription + Claude summary
+- !sum  - Whisper transcription + OpenAI summary
+- !sum2 - Whisper transcription + Claude summary
 - !audio - Audio file transcription and summarization
 """
 
@@ -275,13 +275,13 @@ class SummarizationCog(commands.Cog):
     
     @commands.command(
         name='sumw',
-        help='Summarize a YouTube video using Whisper transcription',
-        description='Summarize a YouTube video using WhisperX for transcription',
+        help='Summarize a YouTube video using Whisper + Claude',
+        description='Transcribe with WhisperX then summarize with Claude',
         usage='!sumw <youtube_url>',
         brief='!sumw <youtube_url>'
     )
     async def summarize_video_whisper_command(self, ctx, youtube_url: str):
-        """Summarize using WhisperX transcription only"""
+        """Summarize using WhisperX transcription + Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -305,30 +305,42 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Transcription failed. Please try again later.")
                 return
             
-            # Get transcript URLs
+            # Get transcript
+            transcript = result.get("preview", "")
             urls = result.get("urls", {})
             
-            # Get preview text
-            preview = result.get("preview", "")
+            if not transcript:
+                await ctx.send("❌ No transcript available.")
+                return
             
-            if preview:
-                # Send summary
-                await ctx.send("✅ **Transcription Complete!**\n\n📝 **Summary:")
+            # Send to Claude for summarization (like the old !sumw)
+            await ctx.send(f"🧠 Generating summary with Claude...")
+            
+            summary = await loop.run_in_executor(
+                _executor,
+                lambda: _summarize_with_anthropic(transcript, video_title)
+            )
+            
+            if summary:
+                await ctx.send("✅ **Summary (Whisper + Claude):**\n")
                 
-                chunks = [preview[i:i+1900] for i in range(0, len(preview), 1900)]
+                chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
                     await asyncio.sleep(0.5)
             else:
-                await ctx.send("❌ No transcript available.")
+                # If Claude fails, send raw transcript
+                await ctx.send("❌ Claude summarization failed. Here's the raw transcript:\n")
+                chunks = [transcript[i:i+1900] for i in range(0, len(transcript), 1900)]
+                for chunk in chunks:
+                    await ctx.send(chunk)
+                    await asyncio.sleep(0.5)
             
             # Send URLs if available
             if urls.get("txt"):
                 await ctx.send(f"📄 **TXT Transcript:** {urls['txt']}")
             if urls.get("srt"):
                 await ctx.send(f"📋 **SRT Transcript:** {urls['srt']}")
-            if urls.get("ass"):
-                await ctx.send(f"🎬 **ASS Transcript:** {urls['ass']}")
             
         except Exception as e:
             await ctx.send(f"❌ An error occurred: {str(e)}")
@@ -337,13 +349,13 @@ class SummarizationCog(commands.Cog):
     
     @commands.command(
         name='sum',
-        help='Summarize a YouTube video using OpenAI GPT-4o-mini',
-        description='Summarize a YouTube video using OpenAI GPT-4o-mini',
+        help='Summarize a YouTube video using Whisper + OpenAI',
+        description='Transcribe with WhisperX then summarize with OpenAI GPT',
         usage='!sum <youtube_url>',
         brief='!sum <youtube_url>'
     )
     async def summarize_video_openai_command(self, ctx, youtube_url: str):
-        """Summarize using OpenAI GPT"""
+        """Summarize using WhisperX + OpenAI"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -389,7 +401,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (GPT-4o-mini):**\n")
+                await ctx.send("✅ **Summary (Whisper + GPT-4o-mini):**\n")
                 
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
@@ -411,13 +423,13 @@ class SummarizationCog(commands.Cog):
     
     @commands.command(
         name='sum2',
-        help='Summarize a YouTube video using Claude Sonnet',
-        description='Summarize a YouTube video using Anthropic Claude Sonnet',
+        help='Summarize a YouTube video using Whisper + Claude Sonnet',
+        description='Transcribe with WhisperX then summarize with Claude Sonnet',
         usage='!sum2 <youtube_url>',
         brief='!sum2 <youtube_url>'
     )
     async def summarize_video_claude_command(self, ctx, youtube_url: str):
-        """Summarize using Anthropic Claude"""
+        """Summarize using WhisperX + Anthropic Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -458,7 +470,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Claude Sonnet):**\n")
+                await ctx.send("✅ **Summary (Whisper + Claude Sonnet):**\n")
                 
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
@@ -541,9 +553,9 @@ class SummarizationCog(commands.Cog):
             await progress_msg.edit(content="""❌ Audio file transcription requires additional setup.
 
 For now, please use:
-- `!sumw <youtube_url>` - Whisper transcription
-- `!sum <youtube_url>` - OpenAI summary  
-- `!sum2 <youtube_url>` - Claude summary
+- `!sumw <youtube_url>` - Whisper + Claude
+- `!sum <youtube_url>` - Whisper + OpenAI  
+- `!sum2 <youtube_url>` - Whisper + Claude
 
 For audio files, please upload them to YouTube first and use the YouTube URL.""")
             
