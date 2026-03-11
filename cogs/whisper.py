@@ -18,6 +18,9 @@ from typing import Optional
 import time
 import re
 
+# Module-level executor for running blocking code in background threads
+_executor = ThreadPoolExecutor(max_workers=4)
+
 # Get WhisperX API URL from environment
 WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
 
@@ -70,7 +73,7 @@ class WhisperCog(commands.Cog):
         try:
             # Submit job
             job_id = await loop.run_in_executor(
-                self.bot.executor,
+                _executor,
                 self._submit_job,
                 video_url
             )
@@ -89,7 +92,7 @@ class WhisperCog(commands.Cog):
             
             # Poll for results
             result = await loop.run_in_executor(
-                self.bot.executor,
+                _executor,
                 self._poll_job,
                 job_id
             )
@@ -166,7 +169,7 @@ class WhisperCog(commands.Cog):
         
         try:
             status_data = await loop.run_in_executor(
-                self.bot.executor,
+                _executor,
                 self._check_status,
                 job_id
             )
