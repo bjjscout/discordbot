@@ -98,7 +98,7 @@ async def load_cogs():
         # 'instagram',  # Disabled - !ig, !igmake
         # 'raptive',    # Disabled - !rapcalf, !rapdoc
         # 'scripts',    # Disabled - !aiwriter, !flux
-        # 'summarization', # Disabled - !audio
+        'summarization', # !sum, !sum2, !sumw
         'utility',    # Utility commands
         # 'webhooks',   # Disabled - Webhook triggers
         'whisper',    # !whisper - WhisperX API transcription
@@ -238,6 +238,17 @@ async def help_command(ctx: commands.Context):
 !process_sheet   - Process Google Sheet
 !flo <url>       - Process FloGrappling video
 !pull <url>      - Download and transcribe
+```""",
+        inline=False
+    )
+    
+    # Summarization commands
+    embed.add_field(
+        name="Summarization (DM only)",
+        value="""```
+!sumw <url>    - Whisper transcription
+!sum <url>     - OpenAI GPT summary
+!sum2 <url>    - Claude Sonnet summary
 ```""",
         inline=False
     )
