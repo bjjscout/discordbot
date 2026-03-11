@@ -7,9 +7,9 @@ Provides commands for summarizing YouTube videos using:
 - Anthropic Claude for summarization (via wrapper API)
 
 Commands:
-- !sumw - Whisper transcription + Claude summary
-- !sum  - Whisper transcription + OpenAI summary
-- !sum2 - Whisper transcription + Claude summary
+- !sumw - Uses Whisper first, then Claude
+- !sum  - Try YouTube transcript first, fallback to Whisper, then OpenAI
+- !sum2 - Try YouTube transcript first, fallback to Whisper, then Claude
 - !audio - Audio file transcription and summarization
 """
 
@@ -29,7 +29,6 @@ from typing import Optional, Dict, Any
 # Import configuration
 try:
     from utils.config import get_settings
-    from utils.service_clients import get_transcription_client
 except ImportError as e:
     print(f"Error importing utils in SummarizationCog: {e}", file=sys.stderr)
 
@@ -39,7 +38,7 @@ _executor = ThreadPoolExecutor(max_workers=4)
 # Get settings
 settings = get_settings()
 
-# WhisperX API URL (from environment - your public deployment)
+# WhisperX API URL
 WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
 
 
@@ -74,6 +73,56 @@ async def get_video_title(url: str) -> str:
     except:
         pass
     return f"Video {video_id}"
+
+
+def _fetch_transcript_youtube_api(video_id: str) -> Optional[tuple]:
+    """Try to fetch transcript using YouTube Transcript API"""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        from youtube_transcript_api.formatters import SRTFormatter
+        
+        ytt_api = YouTubeTranscriptApi()
+        fetched_transcript = ytt_api.fetch(video_id)
+        
+        # Format as SRT
+        formatter = SRTFormatter()
+        srt_transcript = formatter.format_transcript(fetched_transcript)
+        
+        # Plain text
+        plain_transcript = ' '.join([entry.text for entry in fetched_transcript])
+        
+        return srt_transcript, plain_transcript, "YouTube API"
+    except Exception as e:
+        print(f"YouTube Transcript API failed: {e}", file=sys.stderr)
+        return None
+
+
+def _fetch_transcript_rapidapi(video_id: str) -> Optional[tuple]:
+    """Try to fetch transcript using RapidAPI"""
+    # Get RapidAPI keys
+    rapidapi_keys = []
+    for i in range(1, 4):
+        key = os.getenv(f"RAPIDAPI_KEY{'' if i == 1 else '_' + str(i)}")
+        if key:
+            rapidapi_keys.append(key)
+    
+    for api_key in rapidapi_keys:
+        try:
+            url = f"https://youtube-transcript3.p.rapidapi.com/api/transcript-with-url?url=https%3A%2F%2Fyoutu.be%2F{video_id}&flat_text=true&lang=en"
+            headers = {
+                'x-rapidapi-host': "youtube-transcript3.p.rapidapi.com",
+                'x-rapidapi-key': api_key
+            }
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get('success') and data.get('transcript'):
+                return "", data['transcript'], "RapidAPI"
+        except Exception as e:
+            print(f"RapidAPI failed: {e}", file=sys.stderr)
+            continue
+    return None
 
 
 def _submit_transcription_job(video_url: str) -> Optional[str]:
@@ -134,12 +183,57 @@ def _poll_transcription_job(job_id: str, max_wait: int = 3600, poll_interval: in
 
 
 def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
-    """Transcribe video using WhisperX API - synchronous version"""
+    """Transcribe video using WhisperX API"""
     job_id = _submit_transcription_job(video_url)
     if not job_id:
         return None
     
     return _poll_transcription_job(job_id)
+
+
+def _get_transcript(video_id: str, youtube_url: str, progress_callback=None) -> tuple:
+    """
+    Try to get transcript in order:
+    1. YouTube Transcript API
+    2. RapidAPI
+    3. WhisperX (fallback)
+    
+    Returns: (transcript_text, source)
+    """
+    # 1. Try YouTube Transcript API
+    if progress_callback:
+        progress_callback("Trying YouTube Transcript API...")
+    
+    result = _fetch_transcript_youtube_api(video_id)
+    if result:
+        srt, plain, source = result
+        if progress_callback:
+            progress_callback(f"Got transcript from {source}!")
+        return plain, source
+    
+    # 2. Try RapidAPI
+    if progress_callback:
+        progress_callback("Trying RapidAPI...")
+    
+    result = _fetch_transcript_rapidapi(video_id)
+    if result:
+        srt, plain, source = result
+        if progress_callback:
+            progress_callback(f"Got transcript from {source}!")
+        return plain, source
+    
+    # 3. Fall back to WhisperX
+    if progress_callback:
+        progress_callback("Falling back to WhisperX...")
+    
+    whisper_result = _transcribe_with_whisperx(youtube_url)
+    if whisper_result:
+        transcript = whisper_result.get("preview", "")
+        if progress_callback:
+            progress_callback("Got transcript from WhisperX!")
+        return transcript, "WhisperX"
+    
+    return None, "Failed"
 
 
 def _summarize_with_openai(transcript: str, video_title: str = "") -> Optional[str]:
@@ -185,9 +279,9 @@ Summary:"""
         return None
 
 
-def _summarize_with_anthropic(transcript: str, video_title: str = "", model: str = "claude-sonnet-4-20250514") -> Optional[str]:
+def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using Anthropic Claude via wrapper API"""
-    # Use wrapper API first, fall back to direct API
+    # Use wrapper API first
     wrapper_url = "https://claudeapi.jeffrey-epstein.com/generate"
     wrapper_key = "jiujitsu2020"
     
@@ -212,15 +306,14 @@ Summary:"""
             },
             json={
                 "prompt": user_prompt,
-                "system_prompt": system_prompt,
-                "model": model if model else None
+                "system_prompt": system_prompt
             },
             timeout=120
         )
         response.raise_for_status()
         return response.json().get('result')
     except Exception as e:
-        print(f"Wrapper API failed: {e}. Trying direct Anthropic API...", file=sys.stderr)
+        print(f"Wrapper API failed: {e}. Trying direct API...", file=sys.stderr)
     
     # Fall back to direct Anthropic API
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -258,64 +351,62 @@ class SummarizationCog(commands.Cog):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Track user jobs
         self.user_jobs: Dict[str, list] = {}
     
-    async def _send_message_with_rate_limit(self, ctx, message: str):
-        """Send a message with rate limit handling"""
+    async def _send_message(self, ctx, message: str):
+        """Send a message"""
         try:
             await ctx.send(message)
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
-                await asyncio.sleep(retry_after)
-                await ctx.send(message)
-            else:
-                print(f"Error sending message: {e}", file=sys.stderr)
-    
+        except Exception as e:
+            print(f"Error sending message: {e}", file=sys.stderr)
+
     @commands.command(
         name='sumw',
-        help='Summarize a YouTube video using Whisper + Claude',
-        description='Transcribe with WhisperX then summarize with Claude',
+        help='Summarize using Whisper first, then Claude',
+        description='Transcribe with WhisperX first, then summarize with Claude',
         usage='!sumw <youtube_url>',
         brief='!sumw <youtube_url>'
     )
-    async def summarize_video_whisper_command(self, ctx, youtube_url: str):
-        """Summarize using WhisperX transcription + Claude"""
+    async def sumw_command(self, ctx, youtube_url: str):
+        """!sumw - Uses Whisper first, then Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
-        await ctx.send(f"📝 Processing: {youtube_url}\n⏳ Transcribing with WhisperX (this may take a few minutes)...")
+        await ctx.send(f"📝 Processing: {youtube_url}")
         
         loop = asyncio.get_event_loop()
+        video_id = get_video_id(youtube_url)
+        
+        if not video_id:
+            await ctx.send("❌ Invalid YouTube URL")
+            return
         
         try:
-            # Get video title
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
+            await ctx.send("⏳ Transcribing with WhisperX...")
             
-            # Transcribe using WhisperX API
-            result = await loop.run_in_executor(
+            # !sumw uses Whisper FIRST (skip YouTube/RapidAPI)
+            transcript, source = None, "Failed"
+            
+            # Direct to WhisperX (like the old !sumw behavior)
+            whisper_result = await loop.run_in_executor(
                 _executor,
                 lambda: _transcribe_with_whisperx(youtube_url)
             )
             
-            if not result:
+            if whisper_result:
+                transcript = whisper_result.get("preview", "")
+                source = "WhisperX"
+            
+            if not transcript:
                 await ctx.send("❌ Transcription failed. Please try again later.")
                 return
             
-            # Get transcript
-            transcript = result.get("preview", "")
-            urls = result.get("urls", {})
+            await ctx.send(f"📝 Transcript source: {source}\n🧠 Generating summary with Claude...")
             
-            if not transcript:
-                await ctx.send("❌ No transcript available.")
-                return
-            
-            # Send to Claude for summarization (like the old !sumw)
-            await ctx.send(f"🧠 Generating summary with Claude...")
-            
+            # Send to Claude
             summary = await loop.run_in_executor(
                 _executor,
                 lambda: _summarize_with_anthropic(transcript, video_title)
@@ -323,248 +414,152 @@ class SummarizationCog(commands.Cog):
             
             if summary:
                 await ctx.send("✅ **Summary (Whisper + Claude):**\n")
-                
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
                     await asyncio.sleep(0.5)
             else:
-                # If Claude fails, send raw transcript
-                await ctx.send("❌ Claude summarization failed. Here's the raw transcript:\n")
-                chunks = [transcript[i:i+1900] for i in range(0, len(transcript), 1900)]
-                for chunk in chunks:
-                    await ctx.send(chunk)
-                    await asyncio.sleep(0.5)
-            
-            # Send URLs if available
-            if urls.get("txt"):
-                await ctx.send(f"📄 **TXT Transcript:** {urls['txt']}")
-            if urls.get("srt"):
-                await ctx.send(f"📋 **SRT Transcript:** {urls['srt']}")
+                await ctx.send("❌ Summary generation failed.")
             
         except Exception as e:
             await ctx.send(f"❌ An error occurred: {str(e)}")
             print(f"Error details (!sumw): {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-    
+
     @commands.command(
         name='sum',
-        help='Summarize a YouTube video using Whisper + OpenAI',
-        description='Transcribe with WhisperX then summarize with OpenAI GPT',
+        help='Try YouTube transcript first, fallback to Whisper, then OpenAI',
+        description='Try YouTube API, then RapidAPI, then Whisper, then OpenAI',
         usage='!sum <youtube_url>',
         brief='!sum <youtube_url>'
     )
-    async def summarize_video_openai_command(self, ctx, youtube_url: str):
-        """Summarize using WhisperX + OpenAI"""
+    async def sum_command(self, ctx, youtube_url: str):
+        """!sum - Try YouTube transcript first, then OpenAI"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
         # Check API key
         if not os.getenv("OPENAI_API_KEY"):
-            await ctx.send("❌ OpenAI API key not configured. Please set OPENAI_API_KEY in .env")
+            await ctx.send("❌ OPENAI_API_KEY not set in environment")
             return
         
-        await ctx.send(f"📝 Processing: {youtube_url}\n⏳ Transcribing with WhisperX...")
+        await ctx.send(f"📝 Processing: {youtube_url}")
         
         loop = asyncio.get_event_loop()
+        video_id = get_video_id(youtube_url)
+        
+        if not video_id:
+            await ctx.send("❌ Invalid YouTube URL")
+            return
         
         try:
-            # Get video title
             video_title = await get_video_title(youtube_url)
-            await ctx.send(f"📺 Video: {video_title}\n🤖 Summarizing with GPT-4o-mini...")
+            await ctx.send(f"📺 Video: {video_title}")
             
-            # Transcribe using WhisperX API
-            result = await loop.run_in_executor(
+            # Try transcript sources in order (YouTube API -> RapidAPI -> WhisperX)
+            transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _transcribe_with_whisperx(youtube_url)
+                lambda: _get_transcript(video_id, youtube_url)
             )
             
-            if not result:
-                await ctx.send("❌ Transcription failed. Please try again later.")
-                return
-            
-            # Get transcript text
-            transcript = result.get("preview", "")
-            urls = result.get("urls", {})
-            
             if not transcript:
-                await ctx.send("❌ No transcript available.")
+                await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            # Summarize with OpenAI
-            await ctx.send("✍️ Generating summary...")
+            await ctx.send(f"📝 Transcript source: {source}\n🤖 Summarizing with OpenAI...")
             
+            # Send to OpenAI
             summary = await loop.run_in_executor(
                 _executor,
                 lambda: _summarize_with_openai(transcript, video_title)
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Whisper + GPT-4o-mini):**\n")
-                
+                await ctx.send("✅ **Summary (YouTube/RapidAPI/Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
                     await asyncio.sleep(0.5)
             else:
-                await ctx.send("❌ Summary generation failed. Please try again later.")
-            
-            # Send transcript URLs
-            if urls.get("txt"):
-                await ctx.send(f"📄 **Transcript:** {urls['txt']}")
-            if urls.get("srt"):
-                await ctx.send(f"📋 **SRT:** {urls['srt']}")
+                await ctx.send("❌ Summary generation failed.")
             
         except Exception as e:
             await ctx.send(f"❌ An error occurred: {str(e)}")
             print(f"Error details (!sum): {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-    
+
     @commands.command(
         name='sum2',
-        help='Summarize a YouTube video using Whisper + Claude Sonnet',
-        description='Transcribe with WhisperX then summarize with Claude Sonnet',
+        help='Try YouTube transcript first, fallback to Whisper, then Claude',
+        description='Try YouTube API, then RapidAPI, then Whisper, then Claude',
         usage='!sum2 <youtube_url>',
         brief='!sum2 <youtube_url>'
     )
-    async def summarize_video_claude_command(self, ctx, youtube_url: str):
-        """Summarize using WhisperX + Anthropic Claude"""
+    async def sum2_command(self, ctx, youtube_url: str):
+        """!sum2 - Try YouTube transcript first, then Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
-        await ctx.send(f"📝 Processing: {youtube_url}\n⏳ Transcribing with WhisperX...")
+        await ctx.send(f"📝 Processing: {youtube_url}")
         
         loop = asyncio.get_event_loop()
+        video_id = get_video_id(youtube_url)
+        
+        if not video_id:
+            await ctx.send("❌ Invalid YouTube URL")
+            return
         
         try:
-            # Get video title
             video_title = await get_video_title(youtube_url)
-            await ctx.send(f"📺 Video: {video_title}\n🧠 Summarizing with Claude Sonnet...")
+            await ctx.send(f"📺 Video: {video_title}")
             
-            # Transcribe using WhisperX API
-            result = await loop.run_in_executor(
+            # Try transcript sources in order (YouTube API -> RapidAPI -> WhisperX)
+            transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _transcribe_with_whisperx(youtube_url)
+                lambda: _get_transcript(video_id, youtube_url)
             )
             
-            if not result:
-                await ctx.send("❌ Transcription failed. Please try again later.")
-                return
-            
-            # Get transcript text
-            transcript = result.get("preview", "")
-            urls = result.get("urls", {})
-            
             if not transcript:
-                await ctx.send("❌ No transcript available.")
+                await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            # Summarize with Anthropic Claude
-            await ctx.send("✍️ Generating summary...")
+            await ctx.send(f"📝 Transcript source: {source}\n🧠 Summarizing with Claude...")
             
+            # Send to Claude
             summary = await loop.run_in_executor(
                 _executor,
                 lambda: _summarize_with_anthropic(transcript, video_title)
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Whisper + Claude Sonnet):**\n")
-                
+                await ctx.send("✅ **Summary (YouTube/RapidAPI/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
                     await asyncio.sleep(0.5)
             else:
-                await ctx.send("❌ Summary generation failed. Please try again later.")
-            
-            # Send transcript URLs
-            if urls.get("txt"):
-                await ctx.send(f"📄 **Transcript:** {urls['txt']}")
-            if urls.get("srt"):
-                await ctx.send(f"📋 **SRT:** {urls['srt']}")
+                await ctx.send("❌ Summary generation failed.")
             
         except Exception as e:
             await ctx.send(f"❌ An error occurred: {str(e)}")
             print(f"Error details (!sum2): {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-    
+
     @commands.command(
         name='audio',
         help='Transcribe and summarize an audio file',
-        description='Transcribes an audio file and sends the transcript to Claude for summarization',
         usage='!audio [prompt] <url>',
         brief='!audio [prompt] <url>'
     )
     async def audio_command(self, ctx, *, args: str):
-        """Process an audio file - transcribe and summarize"""
+        """Process an audio file"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
-        # Parse prompt and URL
-        try:
-            parts = args.rsplit(' ', 1)
-            if len(parts) != 2:
-                await ctx.send("Invalid format. Use: `!audio Your prompt text here http://audio-url.com`")
-                return
-            prompt, url = parts
-        except ValueError:
-            await ctx.send("Invalid format. Use: `!audio Your prompt text here http://audio-url.com`")
-            return
-        
-        # Check API key
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            await ctx.send("❌ Anthropic API key not configured. Please set ANTHROPIC_API_KEY in .env")
-            return
-        
-        progress_msg = await ctx.send(f"📥 Downloading audio from: {url}")
-        
-        loop = asyncio.get_event_loop()
-        
-        try:
-            # Download audio
-            response = await loop.run_in_executor(
-                _executor,
-                lambda: requests.get(url, timeout=60)
-            )
-            response.raise_for_status()
-            
-            if not response.content:
-                await progress_msg.edit(content="❌ Downloaded audio is empty.")
-                return
-            
-            await progress_msg.edit(content="📝 Audio downloaded. Transcribing...")
-            
-            # Save to temp file for WhisperX
-            import io
-            audio_data = io.BytesIO(response.content)
-            audio_data.seek(0)
-            
-            # Submit transcription job
-            files = {'file': ('audio.mp3', audio_data, 'audio/mpeg')}
-            
-            # Note: WhisperX API may need file upload endpoint
-            # For now, we'll use a different approach - transcribe via API
-            await progress_msg.edit(content="⏳ This feature requires file upload setup. Using URL-based transcription...")
-            
-            # Actually, let's simplify - just ask user for YouTube URL
-            await progress_msg.edit(content="""❌ Audio file transcription requires additional setup.
-
-For now, please use:
-- `!sumw <youtube_url>` - Whisper + Claude
-- `!sum <youtube_url>` - Whisper + OpenAI  
-- `!sum2 <youtube_url>` - Whisper + Claude
-
-For audio files, please upload them to YouTube first and use the YouTube URL.""")
-            
-        except requests.exceptions.RequestException as e:
-            await progress_msg.edit(content=f"❌ Error downloading audio: {str(e)}")
-        except Exception as e:
-            await progress_msg.edit(content=f"❌ An error occurred: {str(e)}")
-            print(f"Error details (!audio): {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+        await ctx.send("❌ Audio file upload not supported yet. Use YouTube URLs instead.")
 
 
 async def setup(bot: commands.Bot):
