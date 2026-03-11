@@ -2,16 +2,19 @@
 Summarization Cog - YouTube Video Summarization Commands
 
 Provides commands for summarizing YouTube videos using:
-- WhisperX API for transcription (Docker deployment)
+- yt-dlp for fetching subtitles (primary method)
+- WhisperX API for transcription (fallback)
 - OpenAI GPT for summarization
 - Anthropic Claude (wrapper API + direct API fallback)
 
 Commands:
-- !sumw - Uses Whisper first, then Claude
-- !sum  - Uses WhisperX, then OpenAI
-- !sum2 - Uses WhisperX, then Claude
+- !sumw - Uses WhisperX, then Claude
+- !sum  - Uses yt-dlp/WhisperX, then OpenAI
+- !sum2 - Uses yt-dlp/WhisperX, then Claude
 
-Note: youtube_transcript_api removed - using WhisperX directly for transcription
+Flow:
+1. Try yt-dlp to get subtitles directly from YouTube
+2. Fall back to WhisperX API if yt-dlp fails
 """
 
 import discord
@@ -24,6 +27,7 @@ import uuid
 import traceback
 import re
 import time
+import yt_dlp
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
@@ -74,6 +78,80 @@ async def get_video_title(url: str) -> str:
     except:
         pass
     return f"Video {video_id}"
+
+
+def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
+    """
+    Fetch transcript using yt-dlp - gets subtitles directly from YouTube.
+    
+    Returns: (transcript_text, source)
+    """
+    video_id = get_video_id(youtube_url)
+    if not video_id:
+        return None, "yt-dlp failed"
+    
+    ydl_opts = {
+        'writesubtitles': True,
+        'writeautomaticsub': True,
+        'subtitlesformat': 'vtt',
+        'skip_download': True,
+        'outtmpl': f'/tmp/{video_id}.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Extract info first to see available subtitles
+            info = ydl.extract_info(youtube_url, download=False)
+            
+            subtitles = info.get('subtitles') or info.get('automatic_captions')
+            
+            if subtitles:
+                # Download subtitles
+                ydl.download([youtube_url])
+                
+                # Try to find English subtitles
+                lang_order = ['en', 'en-US', 'en-GB', 'a.en']
+                subtitle_lang = None
+                
+                for lang in lang_order:
+                    if lang in subtitles:
+                        subtitle_lang = lang
+                        break
+                
+                if not subtitle_lang:
+                    # Just pick the first available
+                    subtitle_lang = list(subtitles.keys())[0]
+                
+                # Read the downloaded subtitle file
+                vtt_path = f'/tmp/{video_id}.{subtitle_lang}.vtt'
+                if os.path.exists(vtt_path):
+                    with open(vtt_path, 'r', encoding='utf-8') as f:
+                        vtt_content = f.read()
+                    
+                    # Convert VTT to plain text (strip tags)
+                    # Remove VTT formatting tags
+                    text = re.sub(r'<[^>]+>', '', vtt_content)
+                    # Remove timestamp lines
+                    text = re.sub(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}', '', text)
+                    # Clean up extra whitespace
+                    text = re.sub(r'\n\n+', '\n', text).strip()
+                    
+                    # Clean up temp files
+                    try:
+                        os.remove(vtt_path)
+                    except:
+                        pass
+                    
+                    if text:
+                        return text, "yt-dlp"
+        
+        return None, "yt-dlp no subtitles"
+        
+    except Exception as e:
+        print(f"yt-dlp transcript fetch error: {e}", file=sys.stderr)
+        return None, "yt-dlp failed"
 
 
 def _submit_transcription_job(video_url: str) -> Optional[str]:
@@ -144,13 +222,23 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
 
 def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
-    Get transcript using WhisperX API directly
+    Get transcript - tries yt-dlp first, then falls back to WhisperX.
     
     Returns: (transcript_text, source)
     """
-    # Use WhisperX directly (youtube_transcript_api not available in Docker)
+    # 1. Try yt-dlp first (faster, free, gets subtitles directly)
     if progress_callback:
-        progress_callback("Transcribing with WhisperX...")
+        progress_callback("Trying to get transcript with yt-dlp...")
+    
+    transcript, source = _fetch_transcript_ytdlp(youtube_url)
+    if transcript:
+        if progress_callback:
+            progress_callback("Got transcript from yt-dlp!")
+        return transcript, source
+    
+    # 2. Fall back to WhisperX API if yt-dlp failed
+    if progress_callback:
+        progress_callback("yt-dlp failed. Trying WhisperX...")
     
     whisper_result = _transcribe_with_whisperx(youtube_url)
     if whisper_result:
@@ -208,7 +296,7 @@ Summary:"""
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
     # Use wrapper API first - get password from env variable
-    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
+    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://clrey-epstein.comaudeapi.jeff/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
@@ -292,13 +380,13 @@ class SummarizationCog(commands.Cog):
 
     @commands.command(
         name='sumw',
-        help='Summarize using Whisper first, then Claude',
-        description='Transcribe with WhisperX first, then summarize with Claude',
+        help='Summarize using WhisperX, then Claude',
+        description='Transcribe with WhisperX, then summarize with Claude',
         usage='!sumw <youtube_url>',
         brief='!sumw <youtube_url>'
     )
     async def sumw_command(self, ctx, youtube_url: str):
-        """!sumw - Uses Whisper first, then Claude"""
+        """!sumw - Uses WhisperX first, then Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -315,20 +403,27 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Transcribing with WhisperX...")
+            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
             
-            # !sumw uses Whisper FIRST
+            # !sumw tries yt-dlp first, then falls back to WhisperX
             transcript, source = None, "Failed"
             
-            # Direct to WhisperX
-            whisper_result = await loop.run_in_executor(
+            # Try yt-dlp first
+            transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _transcribe_with_whisperx(youtube_url)
+                lambda: _fetch_transcript_ytdlp(youtube_url)
             )
             
-            if whisper_result:
-                transcript = whisper_result.get("preview", "")
-                source = "WhisperX"
+            # Fall back to WhisperX if yt-dlp failed
+            if not transcript:
+                await ctx.send("yt-dlp failed. Trying WhisperX...")
+                whisper_result = await loop.run_in_executor(
+                    _executor,
+                    lambda: _transcribe_with_whisperx(youtube_url)
+                )
+                if whisper_result:
+                    transcript = whisper_result.get("preview", "")
+                    source = "WhisperX"
             
             if not transcript:
                 await ctx.send("❌ Transcription failed. Please try again later.")
@@ -343,7 +438,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Whisper + Claude):**\n")
+                await ctx.send("✅ **Summary:**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -358,13 +453,13 @@ class SummarizationCog(commands.Cog):
 
     @commands.command(
         name='sum',
-        help='Use WhisperX for transcription, then OpenAI for summarization',
-        description='Use WhisperX, then OpenAI',
+        help='Summarize using yt-dlp/WhisperX, then OpenAI',
+        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with OpenAI',
         usage='!sum <youtube_url>',
         brief='!sum <youtube_url>'
     )
     async def sum_command(self, ctx, youtube_url: str):
-        """!sum - Use WhisperX, then OpenAI"""
+        """!sum - Use yt-dlp/WhisperX, then OpenAI"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -386,8 +481,9 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
+            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
             
-            # Use WhisperX directly for transcription
+            # Use yt-dlp first, then WhisperX fallback
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
@@ -406,7 +502,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Whisper + OpenAI):**\n")
+                await ctx.send("✅ **Summary (yt-dlp/Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -421,13 +517,13 @@ class SummarizationCog(commands.Cog):
 
     @commands.command(
         name='sum2',
-        help='Use WhisperX for transcription, then Claude for summarization',
-        description='Use WhisperX, then Claude',
+        help='Summarize using yt-dlp/WhisperX, then Claude',
+        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with Claude',
         usage='!sum2 <youtube_url>',
         brief='!sum2 <youtube_url>'
     )
     async def sum2_command(self, ctx, youtube_url: str):
-        """!sum2 - Use WhisperX, then Claude"""
+        """!sum2 - Use yt-dlp/WhisperX, then Claude"""
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -444,8 +540,9 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
+            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
             
-            # Use WhisperX directly for transcription
+            # Use yt-dlp first, then WhisperX fallback
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
@@ -464,7 +561,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (Whisper + Claude):**\n")
+                await ctx.send("✅ **Summary (yt-dlp/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
