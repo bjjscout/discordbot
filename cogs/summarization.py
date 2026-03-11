@@ -4,13 +4,12 @@ Summarization Cog - YouTube Video Summarization Commands
 Provides commands for summarizing YouTube videos using:
 - WhisperX API for transcription (Docker deployment)
 - OpenAI GPT for summarization
-- Anthropic Claude for summarization (via wrapper API)
+- Anthropic Claude (wrapper API + direct API fallback)
 
 Commands:
 - !sumw - Uses Whisper first, then Claude
 - !sum  - Try YouTube transcript first, fallback to Whisper, then OpenAI
 - !sum2 - Try YouTube transcript first, fallback to Whisper, then Claude
-- !audio - Audio file transcription and summarization
 """
 
 import discord
@@ -97,34 +96,6 @@ def _fetch_transcript_youtube_api(video_id: str) -> Optional[tuple]:
         return None
 
 
-def _fetch_transcript_rapidapi(video_id: str) -> Optional[tuple]:
-    """Try to fetch transcript using RapidAPI"""
-    # Get RapidAPI keys
-    rapidapi_keys = []
-    for i in range(1, 4):
-        key = os.getenv(f"RAPIDAPI_KEY{'' if i == 1 else '_' + str(i)}")
-        if key:
-            rapidapi_keys.append(key)
-    
-    for api_key in rapidapi_keys:
-        try:
-            url = f"https://youtube-transcript3.p.rapidapi.com/api/transcript-with-url?url=https%3A%2F%2Fyoutu.be%2F{video_id}&flat_text=true&lang=en"
-            headers = {
-                'x-rapidapi-host': "youtube-transcript3.p.rapidapi.com",
-                'x-rapidapi-key': api_key
-            }
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data.get('success') and data.get('transcript'):
-                return "", data['transcript'], "RapidAPI"
-        except Exception as e:
-            print(f"RapidAPI failed: {e}", file=sys.stderr)
-            continue
-    return None
-
-
 def _submit_transcription_job(video_url: str) -> Optional[str]:
     """Submit transcription job to WhisperX API"""
     try:
@@ -195,8 +166,7 @@ def _get_transcript(video_id: str, youtube_url: str, progress_callback=None) -> 
     """
     Try to get transcript in order:
     1. YouTube Transcript API
-    2. RapidAPI
-    3. WhisperX (fallback)
+    2. WhisperX (fallback)
     
     Returns: (transcript_text, source)
     """
@@ -211,18 +181,7 @@ def _get_transcript(video_id: str, youtube_url: str, progress_callback=None) -> 
             progress_callback(f"Got transcript from {source}!")
         return plain, source
     
-    # 2. Try RapidAPI
-    if progress_callback:
-        progress_callback("Trying RapidAPI...")
-    
-    result = _fetch_transcript_rapidapi(video_id)
-    if result:
-        srt, plain, source = result
-        if progress_callback:
-            progress_callback(f"Got transcript from {source}!")
-        return plain, source
-    
-    # 3. Fall back to WhisperX
+    # 2. Fall back to WhisperX
     if progress_callback:
         progress_callback("Falling back to WhisperX...")
     
@@ -280,7 +239,7 @@ Summary:"""
 
 
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
-    """Summarize transcript using Anthropic Claude via wrapper API"""
+    """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
     # Use wrapper API first
     wrapper_url = "https://claudeapi.jeffrey-epstein.com/generate"
     wrapper_key = "jiujitsu2020"
@@ -315,9 +274,10 @@ Summary:"""
     except Exception as e:
         print(f"Wrapper API failed: {e}. Trying direct API...", file=sys.stderr)
     
-    # Fall back to direct Anthropic API
+    # Fall back to direct Anthropic API - uses ANTHROPIC_API_KEY from Coolify env
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
+        print("No ANTHROPIC_API_KEY available for fallback", file=sys.stderr)
         return None
     
     try:
@@ -387,7 +347,7 @@ class SummarizationCog(commands.Cog):
             await ctx.send(f"📺 Video: {video_title}")
             await ctx.send("⏳ Transcribing with WhisperX...")
             
-            # !sumw uses Whisper FIRST (skip YouTube/RapidAPI)
+            # !sumw uses Whisper FIRST (skip YouTube API)
             transcript, source = None, "Failed"
             
             # Direct to WhisperX (like the old !sumw behavior)
@@ -429,7 +389,7 @@ class SummarizationCog(commands.Cog):
     @commands.command(
         name='sum',
         help='Try YouTube transcript first, fallback to Whisper, then OpenAI',
-        description='Try YouTube API, then RapidAPI, then Whisper, then OpenAI',
+        description='Try YouTube API, then Whisper, then OpenAI',
         usage='!sum <youtube_url>',
         brief='!sum <youtube_url>'
     )
@@ -457,7 +417,7 @@ class SummarizationCog(commands.Cog):
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
             
-            # Try transcript sources in order (YouTube API -> RapidAPI -> WhisperX)
+            # Try transcript sources in order (YouTube API -> WhisperX)
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(video_id, youtube_url)
@@ -476,7 +436,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (YouTube/RapidAPI/Whisper + OpenAI):**\n")
+                await ctx.send("✅ **Summary (YouTube/Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -492,7 +452,7 @@ class SummarizationCog(commands.Cog):
     @commands.command(
         name='sum2',
         help='Try YouTube transcript first, fallback to Whisper, then Claude',
-        description='Try YouTube API, then RapidAPI, then Whisper, then Claude',
+        description='Try YouTube API, then Whisper, then Claude',
         usage='!sum2 <youtube_url>',
         brief='!sum2 <youtube_url>'
     )
@@ -515,7 +475,7 @@ class SummarizationCog(commands.Cog):
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
             
-            # Try transcript sources in order (YouTube API -> RapidAPI -> WhisperX)
+            # Try transcript sources in order (YouTube API -> WhisperX)
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(video_id, youtube_url)
@@ -534,7 +494,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (YouTube/RapidAPI/Whisper + Claude):**\n")
+                await ctx.send("✅ **Summary (YouTube/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -546,20 +506,6 @@ class SummarizationCog(commands.Cog):
             await ctx.send(f"❌ An error occurred: {str(e)}")
             print(f"Error details (!sum2): {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-
-    @commands.command(
-        name='audio',
-        help='Transcribe and summarize an audio file',
-        usage='!audio [prompt] <url>',
-        brief='!audio [prompt] <url>'
-    )
-    async def audio_command(self, ctx, *, args: str):
-        """Process an audio file"""
-        if not isinstance(ctx.channel, discord.DMChannel):
-            await ctx.send("This command can only be used in DMs.")
-            return
-        
-        await ctx.send("❌ Audio file upload not supported yet. Use YouTube URLs instead.")
 
 
 async def setup(bot: commands.Bot):
