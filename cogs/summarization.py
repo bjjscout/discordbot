@@ -240,9 +240,9 @@ Summary:"""
 
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
-    # Use wrapper API first
-    wrapper_url = "https://claudeapi.jeffrey-epstein.com/generate"
-    wrapper_key = "jiujitsu2020"
+    # Use wrapper API first - get password from env variable
+    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
+    wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
 Provide a concise but comprehensive summary of the key points covered in the video.
@@ -255,24 +255,27 @@ Format the summary in a clear, readable way with bullet points or sections."""
 
 Summary:"""
 
-    # Try wrapper API first
-    try:
-        response = requests.post(
-            wrapper_url,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": wrapper_key
-            },
-            json={
-                "prompt": user_prompt,
-                "system_prompt": system_prompt
-            },
-            timeout=120
-        )
-        response.raise_for_status()
-        return response.json().get('result')
-    except Exception as e:
-        print(f"Wrapper API failed: {e}. Trying direct API...", file=sys.stderr)
+    # Try wrapper API first (if password is set)
+    if wrapper_key:
+        try:
+            response = requests.post(
+                wrapper_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": wrapper_key
+                },
+                json={
+                    "prompt": user_prompt,
+                    "system_prompt": system_prompt
+                },
+                timeout=120
+            )
+            response.raise_for_status()
+            return response.json().get('result')
+        except Exception as e:
+            print(f"Wrapper API failed: {e}. Trying direct API...", file=sys.stderr)
+    else:
+        print("No CLAUDE_WRAPPER_PASSWORD set, using direct API", file=sys.stderr)
     
     # Fall back to direct Anthropic API - uses ANTHROPIC_API_KEY from Coolify env
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
