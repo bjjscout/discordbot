@@ -356,6 +356,129 @@ Summary:"""
         return None
 
 
+def _identify_topics_openai(transcript: str, video_title: str = "") -> Optional[list]:
+    """Identify topics in transcript using OpenAI GPT"""
+    import json
+    import re
+    
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+    
+    prompt = f"""
+    You have been provided with the transcript of a podcast titled "{video_title}". Identify at least 10 to 15 major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
+    Format the response as a JSON array with the structure:
+    [
+        {{"topic": "topic_name"}},
+        ...
+    ]
+    Transcript:
+    {transcript}
+    """
+    
+    system_message = "You are a helpful assistant that identifies topics in podcast transcripts."
+    
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 2000,
+                "temperature": 0.7
+            },
+            timeout=60
+        )
+        response.raise_for_status()
+        data = response.json()
+        result = data["choices"][0]["message"]["content"]
+        
+        # Extract JSON array from the response
+        json_match = re.search(r'\[[\s\S]*\]', result)
+        if json_match:
+            json_str = json_match.group(0)
+            topics = json.loads(json_str)
+            if not topics:
+                return [{"topic": "Full Podcast"}]
+            return topics
+        else:
+            print(f"Could not find JSON in OpenAI response: {result}", file=sys.stderr)
+            return [{"topic": "Full Podcast"}]
+            
+    except Exception as e:
+        print(f"Error identifying topics with OpenAI: {e}", file=sys.stderr)
+        return None
+
+
+def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str = "") -> Optional[str]:
+    """Summarize all topics using OpenAI GPT"""
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+    
+    topics_list = ", ".join([f'"{item["topic"]}"' for item in topics])
+    
+    prompt = f"""
+    You have been provided with the transcript of a podcast titled "{video_title}". Comprehensively summarize each of the following topics that have been identified in this podcast transcript: {topics_list}
+
+    Make sure you complete the summaries for every topic. Do not output a partial answer or summary. Do skip any topics or ask me for permission to summarise the rest of the topics after only doing some.
+
+    I want detailed summaries for each Topic and you must have a minimum of 4 summary bullets for each Topic. This is how you will write the summary for each topic section:
+    Original Topic name
+    - summary bullet 1
+    - summary bullet 2
+    - summary bullet 3
+    - summary bullet 4
+
+    When you are done with the topic summaries, provide an overall summary of the entire podcast (200-300 words).
+
+    After the overall summary, make a memorable quotes section with exactly 5 memorable quotes, write it as such:
+    Memorable Quotes:
+    - "First quote" - Person citing
+    - "Second quote" - Person citing
+    - "Third quote" - Person citing
+    - "Fourth quote" - Person citing
+    - "Fifth quote" - Person citing
+
+    Transcript:
+    {transcript}
+    """
+    
+    system_message = "You are a helpful assistant that summarizes podcast topics from transcripts."
+    
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 4000,
+                "temperature": 0.7
+            },
+            timeout=120
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"Error summarizing topics with OpenAI: {e}", file=sys.stderr)
+        return None
+
+
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
     # Use wrapper API first - get password from env variable
@@ -545,13 +668,29 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            await ctx.send(f"📝 Transcript source: {source}\n🤖 Summarizing with OpenAI...")
+            await ctx.send(f"📝 Transcript source: {source}\n🤖 Identifying topics with OpenAI (step 1/2)...")
             
-            # Send to OpenAI
-            summary = await loop.run_in_executor(
+            # Stage 1: Identify topics
+            topics = await loop.run_in_executor(
                 _executor,
-                lambda: _summarize_with_openai(transcript, video_title)
+                lambda: _identify_topics_openai(transcript, video_title)
             )
+            
+            if not topics:
+                await ctx.send("❌ Could not identify topics. Trying simple summary...")
+                # Fall back to simple summary
+                summary = await loop.run_in_executor(
+                    _executor,
+                    lambda: _summarize_with_openai(transcript, video_title)
+                )
+            else:
+                await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
+                
+                # Stage 2: Summarize all topics
+                summary = await loop.run_in_executor(
+                    _executor,
+                    lambda: _summarize_all_topics_openai(topics, transcript, video_title)
+                )
             
             if summary:
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + OpenAI):**\n")
