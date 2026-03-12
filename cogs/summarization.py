@@ -831,7 +831,19 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
+            
+            # Get video duration and show topic count
+            await ctx.send("⏳ Checking video duration for topic count...")
+            duration = get_video_duration(youtube_url)
+            if duration:
+                duration_mins = duration // 60
+                duration_secs = duration % 60
+                num_topics = get_num_topics(youtube_url)
+                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+            else:
+                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
+            
+            await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try YouTube API first, then yt-dlp, then WhisperX
             transcript, source = None, "Failed"
@@ -937,7 +949,19 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
+            
+            # Get video duration and show topic count
+            await ctx.send("⏳ Checking video duration for topic count...")
+            duration = get_video_duration(youtube_url)
+            if duration:
+                duration_mins = duration // 60
+                duration_secs = duration % 60
+                num_topics = get_num_topics(youtube_url)
+                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+            else:
+                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
+            
+            await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
             transcript, source = await loop.run_in_executor(
@@ -1016,7 +1040,19 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
+            
+            # Get video duration and show topic count
+            await ctx.send("⏳ Checking video duration for topic count...")
+            duration = get_video_duration(youtube_url)
+            if duration:
+                duration_mins = duration // 60
+                duration_secs = duration % 60
+                num_topics = get_num_topics(youtube_url)
+                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+            else:
+                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
+            
+            await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
             transcript, source = await loop.run_in_executor(
