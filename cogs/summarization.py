@@ -327,42 +327,52 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     
     Returns: (transcript_text, source)
     """
+    logger.info(f"[_get_transcript] Starting transcript fetch for: {youtube_url}")
+    
     # 1. Try YouTube Transcript API first
     if progress_callback:
         progress_callback("Trying to get transcript with YouTube Transcript API...")
     
+    logger.info("[_get_transcript] Attempting YouTube Transcript API...")
     transcript, source = _fetch_transcript_youtube_api(youtube_url)
     if transcript:
+        logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from YouTube Transcript API!")
         return transcript, source
     
     # 2. Fall back to yt-dlp if YouTube API failed
+    logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
     if progress_callback:
         progress_callback("YouTube Transcript API failed. Trying yt-dlp...")
     
     transcript, source = _fetch_transcript_ytdlp(youtube_url)
     if transcript:
+        logger.info(f"[_get_transcript] Got transcript from yt-dlp, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from yt-dlp!")
         return transcript, source
     
     # 3. Fall back to WhisperX API if both failed
+    logger.info("[_get_transcript] yt-dlp failed, trying WhisperX API...")
     if progress_callback:
         progress_callback("yt-dlp failed. Trying WhisperX...")
     
     whisper_result = _transcribe_with_whisperx(youtube_url)
     if whisper_result:
         transcript = whisper_result.get("preview", "")
+        logger.info(f"[_get_transcript] Got transcript from WhisperX, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from WhisperX!")
         return transcript, "WhisperX"
     
+    logger.error("[_get_transcript] All transcript methods failed")
     return None, "Failed"
 
 
 def _summarize_with_openai(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using OpenAI GPT"""
+    logger.info("[_summarize_with_openai] Starting OpenAI summarization...")
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         return None
@@ -398,6 +408,7 @@ Summary:"""
         )
         response.raise_for_status()
         data = response.json()
+        logger.info("[_summarize_with_openai] OpenAI summarization completed")
         return data["choices"][0]["message"]["content"]
     except Exception as e:
         logger.error(f"Error calling OpenAI API: {e}")
@@ -409,6 +420,7 @@ def _identify_topics_openai(transcript: str, video_title: str = "", video_url: s
     import json
     import re
     
+    logger.info("[_identify_topics_openai] Starting topic identification with OpenAI...")
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         return None
@@ -456,6 +468,7 @@ def _identify_topics_openai(transcript: str, video_title: str = "", video_url: s
         if json_match:
             json_str = json_match.group(0)
             topics = json.loads(json_str)
+            logger.info(f"[_identify_topics_openai] Found {len(topics)} topics")
             if not topics:
                 return [{"topic": "Full Podcast"}]
             return topics
@@ -470,6 +483,7 @@ def _identify_topics_openai(transcript: str, video_title: str = "", video_url: s
 
 def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize all topics using OpenAI GPT"""
+    logger.info(f"[_summarize_all_topics_openai] Starting to summarize {len(topics)} topics with OpenAI...")
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
         return None
@@ -524,6 +538,7 @@ def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str
         )
         response.raise_for_status()
         data = response.json()
+        logger.info("[_summarize_all_topics_openai] OpenAI topic summarization completed")
         return data["choices"][0]["message"]["content"]
     except Exception as e:
         logger.error(f"Error summarizing topics with OpenAI: {e}")
@@ -533,6 +548,7 @@ def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> tuple:
     """Summarize transcript using Anthropic Claude - wrapper first, then direct API
     Returns: (summary_string or None, fallback_used boolean)"""
+    logger.info("[_summarize_with_anthropic] Starting Anthropic summarization...")
     wrapper_fallback = False
     
     # Use wrapper API first - get password from env variable
@@ -567,6 +583,7 @@ Summary:"""
             )
             response.raise_for_status()
             result = response.json().get('result')
+            logger.info("[_summarize_with_anthropic] Anthropic summarization completed (via wrapper)")
             return (result, wrapper_fallback)
         except Exception as e:
             logger.warning(f"Wrapper API failed: {e}. Trying direct API...")
@@ -602,6 +619,7 @@ Summary:"""
         response.raise_for_status()
         data = response.json()
         result = data["content"][0]["text"]
+        logger.info("[_summarize_with_anthropic] Anthropic summarization completed (direct API)")
         return (result, wrapper_fallback)
     except Exception as e:
         logger.error(f"Error calling Anthropic API: {e}")
@@ -614,6 +632,7 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url
     import json
     import re
     
+    logger.info("[_identify_topics_anthropic] Starting topic identification with Anthropic...")
     wrapper_fallback = False
     
     # Determine number of topics based on video duration
@@ -659,6 +678,7 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url
             if json_match:
                 topics = json.loads(json_match.group(0))
                 if topics:
+                    logger.info(f"[_identify_topics_anthropic] Found {len(topics)} topics (via wrapper)")
                     return (topics, wrapper_fallback)
         except Exception as e:
             logger.warning(f"Wrapper API failed for topic ID: {e}. Trying direct API...")
@@ -698,7 +718,9 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url
         if json_match:
             topics = json.loads(json_match.group(0))
             if topics:
+                logger.info(f"[_identify_topics_anthropic] Found {len(topics)} topics (direct API)")
                 return (topics, wrapper_fallback)
+        logger.warning("[_identify_topics_anthropic] Could not parse topics, using default")
         return ([{"topic": "Full Podcast"}], wrapper_fallback)
     except Exception as e:
         logger.error(f"Error identifying topics with Anthropic: {e}")
@@ -710,6 +732,7 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
     Returns: (summary_string or None, fallback_used boolean)"""
     
     import sys
+    logger.info(f"[_summarize_all_topics_anthropic] Starting to summarize {len(topics)} topics with Anthropic...")
     wrapper_fallback = False
     
     # Use wrapper API first - get password from env variable
@@ -766,6 +789,7 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
             response.raise_for_status()
             result = response.json().get('result')
             logger.debug("Wrapper succeeded, returning with fallback=False")
+            logger.info("[_summarize_all_topics_anthropic] Topic summarization completed (via wrapper)")
             return (result, wrapper_fallback)
         except Exception as e:
             logger.warning(f"Wrapper API failed for summary: {e}. Trying direct API...")
@@ -802,6 +826,7 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
         data = response.json()
         result = data["content"][0]["text"]
         logger.debug(f"Direct API succeeded, returning fallback={wrapper_fallback}")
+        logger.info("[_summarize_all_topics_anthropic] Topic summarization completed (direct API)")
         return (result, wrapper_fallback)
     except Exception as e:
         logger.error(f"Error summarizing topics with Anthropic: {e}")
@@ -831,6 +856,8 @@ class SummarizationCog(commands.Cog):
     )
     async def sumw_command(self, ctx, youtube_url: str):
         """!sumw - Uses WhisperX first, then Claude"""
+        logger.info(f"[sumw] Command invoked with URL: {youtube_url}")
+        
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -846,19 +873,24 @@ class SummarizationCog(commands.Cog):
         
         try:
             video_title = await get_video_title(youtube_url)
+            logger.info(f"[sumw] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
             
             # Get video duration and show topic count
+            logger.info("[sumw] Checking video duration...")
             await ctx.send("⏳ Checking video duration for topic count...")
             duration = get_video_duration(youtube_url)
             if duration:
                 duration_mins = duration // 60
                 duration_secs = duration % 60
                 num_topics = get_num_topics(youtube_url)
+                logger.info(f"[sumw] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
                 await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
             else:
+                logger.warning("[sumw] Could not detect video duration")
                 await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             
+            logger.info("[sumw] Fetching transcript...")
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try YouTube API first, then yt-dlp, then WhisperX
@@ -884,6 +916,7 @@ class SummarizationCog(commands.Cog):
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
             # Stage 1: Identify topics (pass youtube_url for duration-based topic count)
+            logger.info("[sumw] Identifying topics with Claude...")
             topics_result = await loop.run_in_executor(
                 _executor,
                 lambda: _identify_topics_anthropic(transcript, video_title, youtube_url)
@@ -905,9 +938,11 @@ class SummarizationCog(commands.Cog):
                 if summary_fallback:
                     await ctx.send("🔄 Using Claude direct API for summary...")
             else:
+                logger.info(f"[sumw] Found {len(topics)} topics, summarizing each...")
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
                 
                 # Rate limiting before summarization (10 seconds)
+                logger.info("[sumw] Waiting 10 seconds for rate limiting...")
                 await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
                 await asyncio.sleep(10)
                 
@@ -922,6 +957,7 @@ class SummarizationCog(commands.Cog):
                     await ctx.send("🔄 Using Claude direct API for summarization...")
             
             if summary:
+                logger.info("[sumw] Summary generation complete, sending to Discord...")
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
@@ -943,6 +979,8 @@ class SummarizationCog(commands.Cog):
     )
     async def sum_command(self, ctx, youtube_url: str):
         """!sum - Use yt-dlp/WhisperX, then OpenAI"""
+        logger.info(f"[sum] Command invoked with URL: {youtube_url}")
+        
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -963,19 +1001,24 @@ class SummarizationCog(commands.Cog):
         
         try:
             video_title = await get_video_title(youtube_url)
+            logger.info(f"[sum] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
             
             # Get video duration and show topic count
+            logger.info("[sum] Checking video duration...")
             await ctx.send("⏳ Checking video duration for topic count...")
             duration = get_video_duration(youtube_url)
             if duration:
                 duration_mins = duration // 60
                 duration_secs = duration % 60
                 num_topics = get_num_topics(youtube_url)
+                logger.info(f"[sum] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
                 await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
             else:
+                logger.warning("[sum] Could not detect video duration")
                 await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             
+            logger.info("[sum] Fetching transcript...")
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
@@ -988,6 +1031,7 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
+            logger.info("[sum] Identifying topics with OpenAI...")
             await ctx.send(f"📝 Transcript source: {source}\n🤖 Identifying topics with OpenAI (step 1/2)...")
             
             # Stage 1: Identify topics (pass youtube_url for duration-based topic count)
@@ -1004,9 +1048,11 @@ class SummarizationCog(commands.Cog):
                     lambda: _summarize_with_openai(transcript, video_title)
                 )
             else:
+                logger.info(f"[sum] Found {len(topics)} topics, summarizing each...")
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
                 
                 # Rate limiting before summarization (10 seconds for OpenAI)
+                logger.info("[sum] Waiting 10 seconds for rate limiting...")
                 await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
                 await asyncio.sleep(10)
                 
@@ -1017,6 +1063,7 @@ class SummarizationCog(commands.Cog):
                 )
             
             if summary:
+                logger.info("[sum] Summary generation complete, sending to Discord...")
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
@@ -1038,6 +1085,8 @@ class SummarizationCog(commands.Cog):
     )
     async def sum2_command(self, ctx, youtube_url: str):
         """!sum2 - Use yt-dlp/WhisperX, then Claude"""
+        logger.info(f"[sum2] Command invoked with URL: {youtube_url}")
+        
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
@@ -1053,19 +1102,24 @@ class SummarizationCog(commands.Cog):
         
         try:
             video_title = await get_video_title(youtube_url)
+            logger.info(f"[sum2] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
             
             # Get video duration and show topic count
+            logger.info("[sum2] Checking video duration...")
             await ctx.send("⏳ Checking video duration for topic count...")
             duration = get_video_duration(youtube_url)
             if duration:
                 duration_mins = duration // 60
                 duration_secs = duration % 60
                 num_topics = get_num_topics(youtube_url)
+                logger.info(f"[sum2] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
                 await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
             else:
+                logger.warning("[sum2] Could not detect video duration")
                 await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             
+            logger.info("[sum2] Fetching transcript...")
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
@@ -1088,6 +1142,7 @@ class SummarizationCog(commands.Cog):
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
             # Stage 1: Identify topics (pass youtube_url for duration-based topic count)
+            logger.info("[sum2] Identifying topics with Claude...")
             topics_result = await loop.run_in_executor(
                 _executor,
                 lambda: _identify_topics_anthropic(transcript, video_title, youtube_url)
@@ -1109,9 +1164,11 @@ class SummarizationCog(commands.Cog):
                 if summary_fallback:
                     await ctx.send("🔄 Using Claude direct API for summary...")
             else:
+                logger.info(f"[sum2] Found {len(topics)} topics, summarizing each...")
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
                 
                 # Rate limiting before summarization (10 seconds)
+                logger.info("[sum2] Waiting 10 seconds for rate limiting...")
                 await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
                 await asyncio.sleep(10)
                 
@@ -1126,6 +1183,7 @@ class SummarizationCog(commands.Cog):
                     await ctx.send("🔄 Using Claude direct API for summarization...")
             
             if summary:
+                logger.info("[sum2] Summary generation complete, sending to Discord...")
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
