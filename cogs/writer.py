@@ -353,13 +353,13 @@ def call_openai(prompt: str, model: str = "gpt-4o-mini") -> Optional[str]:
         return None
 
 
-def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet") -> tuple:
-    """Call Claude API - wrapper first, then direct API
+def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet", force_direct: bool = False) -> tuple:
+    """Call Claude API - optionally force direct API
     Returns: (response or None, used_fallback boolean)"""
     wrapper_fallback = False
     
-    # Try wrapper API first (if password is set)
-    if CLAUDE_WRAPPER_PASSWORD:
+    # Try wrapper API first (if password is set and not forcing direct)
+    if CLAUDE_WRAPPER_PASSWORD and not force_direct:
         try:
             response = requests.post(
                 CLAUDE_WRAPPER_URL,
@@ -381,7 +381,10 @@ def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet") -> 
             logger.warning(f"Claude wrapper failed: {e}. Trying direct API...")
             wrapper_fallback = True
     else:
-        logger.info("No CLAUDE_WRAPPER_PASSWORD, using direct API")
+        if force_direct:
+            logger.info("Forcing direct Claude API (skipping wrapper)")
+        else:
+            logger.info("No CLAUDE_WRAPPER_PASSWORD, using direct API")
         wrapper_fallback = True
     
     # Fall back to direct Anthropic API
@@ -443,8 +446,11 @@ Only output the article body. Do not output the title."""
     if ai_provider == "openai":
         article = call_openai(prompt)
         return (article, "OpenAI")
+    elif ai_provider == "claude_direct":
+        result, fallback = call_claude(prompt, system_prompt, force_direct=True)
+        return (result, "Claude (direct)")
     else:
-        # Default to Claude
+        # Default to Claude wrapper
         result, fallback = call_claude(prompt, system_prompt)
         provider = "Claude (direct)" if fallback else "Claude (wrapper)"
         return (result, provider)
@@ -470,8 +476,11 @@ Transcript:
     if ai_provider == "openai":
         script = call_openai(prompt)
         return (script, "OpenAI")
+    elif ai_provider == "claude_direct":
+        result, fallback = call_claude(prompt, system_prompt, force_direct=True)
+        return (result, "Claude (direct)")
     else:
-        # Default to Claude
+        # Default to Claude wrapper
         result, fallback = call_claude(prompt, system_prompt)
         provider = "Claude (direct)" if fallback else "Claude (wrapper)"
         return (result, provider)
@@ -529,21 +538,26 @@ class WriterCog(commands.Cog):
     
     @commands.command(
         name='aiwriter',
-        help='Process AIWRITER sheet - use -openai for OpenAI (default: Claude)',
+        help='Process AIWRITER sheet - use -openai for OpenAI, -direct for Claude direct API',
         description='Reads Google Sheet, scrapes articles, generates articles with OpenAI or Claude',
-        usage='!aiwriter [-openai]',
-        brief='!aiwriter [-openai]'
+        usage='!aiwriter [-openai | -direct]',
+        brief='!aiwriter [-openai | -direct]'
     )
     async def aiwriter_command(self, ctx, option: str = None):
         """!aiwriter - Generate articles from scraped content and video transcripts
-        Use -openai to use OpenAI instead of Claude"""
+        Use -openai for OpenAI, -direct for Claude direct API"""
         
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
         # Determine AI provider
-        ai_provider = "openai" if option and option.lower() == "-openai" else "claude"
+        if option and option.lower() == "-openai":
+            ai_provider = "openai"
+        elif option and option.lower() == "-direct":
+            ai_provider = "claude_direct"
+        else:
+            ai_provider = "claude"
         
         # Check required API keys
         if ai_provider == "openai":
@@ -551,6 +565,11 @@ class WriterCog(commands.Cog):
                 await ctx.send("❌ OPENAI_API_KEY not set in environment")
                 return
             provider_msg = "OpenAI (gpt-4o-mini)"
+        elif ai_provider == "claude_direct":
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                await ctx.send("❌ ANTHROPIC_API_KEY not set in environment")
+                return
+            provider_msg = "Claude (direct API)"
         else:
             if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
                 await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
@@ -672,21 +691,26 @@ class WriterCog(commands.Cog):
     
     @commands.command(
         name='ytwriter',
-        help='Process YT Script Rewriter sheet - use -openai for OpenAI (default: Claude)',
+        help='Process YT Script Rewriter sheet - use -openai for OpenAI, -direct for Claude direct API',
         description='Reads Google Sheet, fetches transcripts, generates scripts with OpenAI or Claude',
-        usage='!ytwriter [-openai]',
-        brief='!ytwriter [-openai]'
+        usage='!ytwriter [-openai | -direct]',
+        brief='!ytwriter [-openai | -direct]'
     )
     async def ytwriter_command(self, ctx, option: str = None):
         """!ytwriter - Generate scripts from YouTube transcripts
-        Use -openai to use OpenAI instead of Claude"""
+        Use -openai for OpenAI, -direct for Claude direct API"""
         
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
         # Determine AI provider
-        ai_provider = "openai" if option and option.lower() == "-openai" else "claude"
+        if option and option.lower() == "-openai":
+            ai_provider = "openai"
+        elif option and option.lower() == "-direct":
+            ai_provider = "claude_direct"
+        else:
+            ai_provider = "claude"
         
         # Check required API keys
         if ai_provider == "openai":
@@ -694,6 +718,11 @@ class WriterCog(commands.Cog):
                 await ctx.send("❌ OPENAI_API_KEY not set in environment")
                 return
             provider_msg = "OpenAI (gpt-4o-mini)"
+        elif ai_provider == "claude_direct":
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                await ctx.send("❌ ANTHROPIC_API_KEY not set in environment")
+                return
+            provider_msg = "Claude (direct API)"
         else:
             if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
                 await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
