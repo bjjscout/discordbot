@@ -88,7 +88,16 @@ def get_video_duration(url: str) -> Optional[int]:
         if not video_id:
             return None  # Not a YouTube URL
         
+        # Get proxy from environment - set YOUTUBE_PROXY in Coolify
+        # Format: socks5://username:password@host:port
+        proxy_url = os.getenv("YOUTUBE_PROXY", "")
+        
         ydl_opts = {'quiet': True, 'no_warnings': True}
+        
+        # Add proxy if configured
+        if proxy_url:
+            ydl_opts['proxy'] = proxy_url
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
             duration = info.get('duration')  # Duration in seconds
