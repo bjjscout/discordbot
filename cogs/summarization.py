@@ -81,6 +81,39 @@ async def get_video_title(url: str) -> str:
     return f"Video {video_id}"
 
 
+def get_video_duration(url: str) -> Optional[int]:
+    """Get video duration in seconds using yt-dlp (no download required)"""
+    try:
+        video_id = get_video_id(url)
+        if not video_id:
+            return None  # Not a YouTube URL
+        
+        ydl_opts = {'quiet': True, 'no_warnings': True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            duration = info.get('duration')  # Duration in seconds
+            return duration
+    except Exception as e:
+        print(f"Error fetching video duration: {e}", file=sys.stderr)
+        return None
+
+
+def get_num_topics(url: str) -> str:
+    """Determine number of topics based on video duration
+    Returns: "3 to 6", "7 to 10", or "10 to 15"""
+    duration = get_video_duration(url)
+    if not duration:
+        return "10 to 15"  # Default for long videos
+    
+    duration_mins = duration / 60
+    if duration_mins < 60:
+        return "3 to 6"
+    elif duration_mins < 120:
+        return "7 to 10"
+    else:
+        return "10 to 15"
+
+
 def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
     """
     Fetch transcript using YouTube Transcript API.
@@ -356,7 +389,7 @@ Summary:"""
         return None
 
 
-def _identify_topics_openai(transcript: str, video_title: str = "") -> Optional[list]:
+def _identify_topics_openai(transcript: str, video_title: str = "", video_url: str = "") -> Optional[list]:
     """Identify topics in transcript using OpenAI GPT"""
     import json
     import re
@@ -365,8 +398,11 @@ def _identify_topics_openai(transcript: str, video_title: str = "") -> Optional[
     if not api_key:
         return None
     
+    # Determine number of topics based on video duration
+    num_topics = get_num_topics(video_url) if video_url else "10 to 15"
+    
     prompt = f"""
-    You have been provided with the transcript of a podcast titled "{video_title}". Identify at least 10 to 15 major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
+    You have been provided with the transcript of a podcast titled "{video_title}". Identify at least {num_topics} major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
     Format the response as a JSON array with the structure:
     [
         {{"topic": "topic_name"}},
@@ -479,8 +515,11 @@ def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str
         return None
 
 
-def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
-    """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
+def _summarize_with_anthropic(transcript: str, video_title: str = "") -> tuple:
+    """Summarize transcript using Anthropic Claude - wrapper first, then direct API
+    Returns: (summary_text or None, fallback_used boolean)"""
+    wrapper_fallback = False
+    
     # Use wrapper API first - get password from env variable
     wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
@@ -509,20 +548,22 @@ Summary:"""
                     "prompt": user_prompt,
                     "system_prompt": system_prompt
                 },
-                timeout=120
+                timeout=600
             )
             response.raise_for_status()
-            return response.json().get('result')
+            return response.json().get('result'), wrapper_fallback
         except Exception as e:
             print(f"Wrapper API failed: {e}. Trying direct API...", file=sys.stderr)
+            wrapper_fallback = True
     else:
         print("No CLAUDE_WRAPPER_PASSWORD set, using direct API", file=sys.stderr)
+        wrapper_fallback = True
     
     # Fall back to direct Anthropic API - uses ANTHROPIC_API_KEY from Coolify env
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         print("No ANTHROPIC_API_KEY available for fallback", file=sys.stderr)
-        return None
+        return None, wrapper_fallback
     
     try:
         response = requests.post(
@@ -540,27 +581,33 @@ Summary:"""
                     {"role": "user", "content": user_prompt}
                 ]
             },
-            timeout=60
+            timeout=600
         )
         response.raise_for_status()
         data = response.json()
-        return data["content"][0]["text"]
+        return data["content"][0]["text"], wrapper_fallback
     except Exception as e:
         print(f"Error calling Anthropic API: {e}", file=sys.stderr)
-        return None
+        return None, wrapper_fallback
 
 
-def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Optional[list]:
-    """Identify topics in transcript using Anthropic Claude - wrapper first, then direct API"""
+def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url: str = "") -> tuple:
+    """Identify topics in transcript using Anthropic Claude - wrapper first, then direct API
+    Returns: (topics_list or None, fallback_used boolean)"""
     import json
     import re
+    
+    wrapper_fallback = False
+    
+    # Determine number of topics based on video duration
+    num_topics = get_num_topics(video_url) if video_url else "10 to 15"
     
     # Use wrapper API first - get password from env variable
     wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     prompt = f"""
-    You have been provided with the transcript of a podcast titled "{video_title}". Identify at least 10 to 15 major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
+    You have been provided with the transcript of a podcast titled "{video_title}". Identify at least {num_topics} major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
     Format the response as a JSON array with the structure:
     [
         {{"topic": "topic_name"}},
@@ -585,7 +632,7 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Option
                     "prompt": f"System: {system_message}\n\n{prompt}",
                     "system_prompt": system_message
                 },
-                timeout=120
+                timeout=600
             )
             response.raise_for_status()
             result = response.json().get('result', '')
@@ -595,16 +642,18 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Option
             if json_match:
                 topics = json.loads(json_match.group(0))
                 if topics:
-                    return topics
+                    return topics, wrapper_fallback
         except Exception as e:
             print(f"Wrapper API failed for topic ID: {e}. Trying direct API...", file=sys.stderr)
+            wrapper_fallback = True
     else:
         print("No CLAUDE_WRAPPER_PASSWORD set, using direct API for topics", file=sys.stderr)
+        wrapper_fallback = True
     
     # Fall back to direct Anthropic API
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return None
+        return None, wrapper_fallback
     
     try:
         response = requests.post(
@@ -622,7 +671,7 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Option
                     {"role": "user", "content": prompt}
                 ]
             },
-            timeout=60
+            timeout=600
         )
         response.raise_for_status()
         data = response.json()
@@ -632,15 +681,18 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Option
         if json_match:
             topics = json.loads(json_match.group(0))
             if topics:
-                return topics
-        return [{"topic": "Full Podcast"}]
+                return topics, wrapper_fallback
+        return [{"topic": "Full Podcast"}], wrapper_fallback
     except Exception as e:
         print(f"Error identifying topics with Anthropic: {e}", file=sys.stderr)
-        return None
+        return None, wrapper_fallback
 
 
-def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: str = "") -> Optional[str]:
-    """Summarize all topics using Anthropic Claude - wrapper first, then direct API"""
+def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: str = "") -> tuple:
+    """Summarize all topics using Anthropic Claude - wrapper first, then direct API
+    Returns: (summary_text or None, fallback_used boolean)"""
+    
+    wrapper_fallback = False
     
     # Use wrapper API first - get password from env variable
     wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
@@ -689,19 +741,21 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
                     "prompt": f"System: {system_message}\n\n{prompt}",
                     "system_prompt": system_message
                 },
-                timeout=180
+                timeout=600
             )
             response.raise_for_status()
-            return response.json().get('result')
+            return response.json().get('result'), wrapper_fallback
         except Exception as e:
             print(f"Wrapper API failed for summary: {e}. Trying direct API...", file=sys.stderr)
+            wrapper_fallback = True
     else:
         print("No CLAUDE_WRAPPER_PASSWORD set, using direct API for summary", file=sys.stderr)
+        wrapper_fallback = True
     
     # Fall back to direct Anthropic API
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return None
+        return None, wrapper_fallback
     
     try:
         response = requests.post(
@@ -719,14 +773,14 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
                     {"role": "user", "content": prompt}
                 ]
             },
-            timeout=120
+            timeout=600
         )
         response.raise_for_status()
         data = response.json()
-        return data["content"][0]["text"]
+        return data["content"][0]["text"], wrapper_fallback
     except Exception as e:
         print(f"Error summarizing topics with Anthropic: {e}", file=sys.stderr)
-        return None
+        return None, wrapper_fallback
 
 
 class SummarizationCog(commands.Cog):
@@ -792,27 +846,43 @@ class SummarizationCog(commands.Cog):
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
-            # Stage 1: Identify topics
-            topics = await loop.run_in_executor(
+            # Stage 1: Identify topics - pass youtube_url for video duration-based topic count
+            topics_result = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_anthropic(transcript, video_title)
+                lambda: _identify_topics_anthropic(transcript, video_title, youtube_url)
             )
+            topics, topics_fallback = topics_result if topics_result else (None, False)
+            
+            if topics_fallback:
+                await ctx.send("🔄 Using Claude direct API for topic identification...")
             
             if not topics:
                 await ctx.send("❌ Could not identify topics. Trying simple summary...")
                 # Fall back to simple summary
-                summary = await loop.run_in_executor(
+                summary_result = await loop.run_in_executor(
                     _executor,
                     lambda: _summarize_with_anthropic(transcript, video_title)
                 )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+                
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summary...")
             else:
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
                 
+                # Rate limiting before summarization (10 seconds)
+                await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
+                await asyncio.sleep(10)
+                
                 # Stage 2: Summarize all topics
-                summary = await loop.run_in_executor(
+                summary_result = await loop.run_in_executor(
                     _executor,
                     lambda: _summarize_all_topics_anthropic(topics, transcript, video_title)
                 )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+                
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summarization...")
             
             if summary:
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
@@ -872,10 +942,10 @@ class SummarizationCog(commands.Cog):
             
             await ctx.send(f"📝 Transcript source: {source}\n🤖 Identifying topics with OpenAI (step 1/2)...")
             
-            # Stage 1: Identify topics
+            # Stage 1: Identify topics - pass youtube_url for video duration-based topic count
             topics = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_openai(transcript, video_title)
+                lambda: _identify_topics_openai(transcript, video_title, youtube_url)
             )
             
             if not topics:
@@ -887,6 +957,10 @@ class SummarizationCog(commands.Cog):
                 )
             else:
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
+                
+                # Rate limiting before summarization (10 seconds)
+                await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
+                await asyncio.sleep(10)
                 
                 # Stage 2: Summarize all topics
                 summary = await loop.run_in_executor(
@@ -954,27 +1028,43 @@ class SummarizationCog(commands.Cog):
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
-            # Stage 1: Identify topics
-            topics = await loop.run_in_executor(
+            # Stage 1: Identify topics - pass youtube_url for video duration-based topic count
+            topics_result = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_anthropic(transcript, video_title)
+                lambda: _identify_topics_anthropic(transcript, video_title, youtube_url)
             )
+            topics, topics_fallback = topics_result if topics_result else (None, False)
+            
+            if topics_fallback:
+                await ctx.send("🔄 Using Claude direct API for topic identification...")
             
             if not topics:
                 await ctx.send("❌ Could not identify topics. Trying simple summary...")
                 # Fall back to simple summary
-                summary = await loop.run_in_executor(
+                summary_result = await loop.run_in_executor(
                     _executor,
                     lambda: _summarize_with_anthropic(transcript, video_title)
                 )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+                
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summary...")
             else:
                 await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
                 
+                # Rate limiting before summarization (10 seconds)
+                await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
+                await asyncio.sleep(10)
+                
                 # Stage 2: Summarize all topics
-                summary = await loop.run_in_executor(
+                summary_result = await loop.run_in_executor(
                     _executor,
                     lambda: _summarize_all_topics_anthropic(topics, transcript, video_title)
                 )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+                
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summarization...")
             
             if summary:
                 await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
