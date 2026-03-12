@@ -466,27 +466,16 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
+            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
-            # !sumw tries yt-dlp first, then falls back to WhisperX
+            # Try YouTube API first, then yt-dlp, then WhisperX
             transcript, source = None, "Failed"
             
-            # Try yt-dlp first
+            # Try all transcript methods in order
             transcript, source = await loop.run_in_executor(
                 _executor,
-                lambda: _fetch_transcript_ytdlp(youtube_url)
+                lambda: _get_transcript(youtube_url)
             )
-            
-            # Fall back to WhisperX if yt-dlp failed
-            if not transcript:
-                await ctx.send("yt-dlp failed. Trying WhisperX...")
-                whisper_result = await loop.run_in_executor(
-                    _executor,
-                    lambda: _transcribe_with_whisperx(youtube_url)
-                )
-                if whisper_result:
-                    transcript = whisper_result.get("preview", "")
-                    source = "WhisperX"
             
             if not transcript:
                 await ctx.send("❌ Transcription failed. Please try again later.")
@@ -501,7 +490,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary:**\n")
+                await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -544,9 +533,9 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
+            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
-            # Use yt-dlp first, then WhisperX fallback
+            # Try all transcript methods in order
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
@@ -565,7 +554,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (yt-dlp/Whisper + OpenAI):**\n")
+                await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + OpenAI):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
@@ -603,9 +592,9 @@ class SummarizationCog(commands.Cog):
         try:
             video_title = await get_video_title(youtube_url)
             await ctx.send(f"📺 Video: {video_title}")
-            await ctx.send("⏳ Getting transcript (yt-dlp first, then WhisperX)...")
+            await ctx.send("⏳ Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
-            # Use yt-dlp first, then WhisperX fallback
+            # Try all transcript methods in order
             transcript, source = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
@@ -624,7 +613,7 @@ class SummarizationCog(commands.Cog):
             )
             
             if summary:
-                await ctx.send("✅ **Summary (yt-dlp/Whisper + Claude):**\n")
+                await ctx.send("✅ **Summary (YouTube API/yt-dlp/Whisper + Claude):**\n")
                 chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
                 for chunk in chunks:
                     await ctx.send(chunk)
