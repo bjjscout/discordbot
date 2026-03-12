@@ -92,7 +92,8 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
         return None, "YouTube API failed"
     
     # Get proxy from environment or use default
-    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://gw.dataimpulse.com:10022")
+    # Format: socks5://username:password@host:port
+    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://121b956a303a4c259154__cr.us:962f0ae501d13622@gw.dataimpulse.com:10022")
     
     try:
         from youtube_transcript_api.proxies import GenericProxyConfig
@@ -131,7 +132,8 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
         return None, "yt-dlp failed"
     
     # Get proxy from environment or use default
-    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://gw.dataimpulse.com:10022")
+    # Format: socks5://username:password@host:port
+    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://121b956a303a4c259154__cr.us:962f0ae501d13622@gw.dataimpulse.com:10022")
     
     ydl_opts = {
         'writesubtitles': True,
