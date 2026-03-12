@@ -354,12 +354,16 @@ def call_openai(prompt: str, model: str = "gpt-4o-mini") -> Optional[str]:
 
 
 def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet", force_direct: bool = False) -> tuple:
-    """Call Claude API - optionally force direct API
-    Returns: (response or None, used_fallback boolean)"""
-    wrapper_fallback = False
+    """Call Claude API - wrapper or direct (no fallback)
+    Returns: (response or None, used_direct boolean)"""
+    used_direct = False
     
-    # Try wrapper API first (if password is set and not forcing direct)
-    if CLAUDE_WRAPPER_PASSWORD and not force_direct:
+    # If forcing direct, skip wrapper entirely
+    if force_direct:
+        logger.info("Forcing direct Claude API (skipping wrapper)")
+        used_direct = True
+    elif CLAUDE_WRAPPER_PASSWORD:
+        # Try wrapper API first
         try:
             response = requests.post(
                 CLAUDE_WRAPPER_URL,
@@ -376,22 +380,20 @@ def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet", for
             response.raise_for_status()
             result = response.json().get('result')
             logger.info("[call_claude] Claude wrapper succeeded")
-            return (result, wrapper_fallback)
+            return (result, used_direct)
         except Exception as e:
-            logger.warning(f"Claude wrapper failed: {e}. Trying direct API...")
-            wrapper_fallback = True
+            logger.error(f"Claude wrapper failed: {e}. Not falling back to direct API.")
+            return (None, used_direct)
     else:
-        if force_direct:
-            logger.info("Forcing direct Claude API (skipping wrapper)")
-        else:
-            logger.info("No CLAUDE_WRAPPER_PASSWORD, using direct API")
-        wrapper_fallback = True
+        # No wrapper password, use direct
+        logger.info("No CLAUDE_WRAPPER_PASSWORD, using direct API")
+        used_direct = True
     
-    # Fall back to direct Anthropic API
+    # Use direct Anthropic API
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
-        logger.error("No ANTHROPIC_API_KEY for fallback")
-        return (None, wrapper_fallback)
+        logger.error("No ANTHROPIC_API_KEY available")
+        return (None, used_direct)
     
     try:
         response = requests.post(
@@ -413,10 +415,10 @@ def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet", for
         data = response.json()
         result = data["content"][0]["text"]
         logger.info("[call_claude] Claude direct API succeeded")
-        return (result, wrapper_fallback)
+        return (result, used_direct)
     except Exception as e:
         logger.error(f"Claude direct API error: {e}")
-        return (None, wrapper_fallback)
+        return (None, used_direct)
 
 
 def generate_aiwriter_article(scraped_data: str, title: str, additional_context: str, ai_provider: str = "claude") -> tuple:
@@ -447,13 +449,15 @@ Only output the article body. Do not output the title."""
         article = call_openai(prompt)
         return (article, "OpenAI")
     elif ai_provider == "claude_direct":
-        result, fallback = call_claude(prompt, system_prompt, force_direct=True)
+        result, used_direct = call_claude(prompt, system_prompt, force_direct=True)
         return (result, "Claude (direct)")
     else:
-        # Default to Claude wrapper
-        result, fallback = call_claude(prompt, system_prompt)
-        provider = "Claude (direct)" if fallback else "Claude (wrapper)"
-        return (result, provider)
+        # Default to Claude wrapper (no fallback)
+        result, used_direct = call_claude(prompt, system_prompt, force_direct=False)
+        if result:
+            return (result, "Claude (wrapper)")
+        else:
+            return (result, "Claude (wrapper failed)")
 
 
 def generate_ytwriter_script(transcript: str, title: str, custom_prompt: str, ai_provider: str = "claude") -> tuple:
@@ -477,13 +481,15 @@ Transcript:
         script = call_openai(prompt)
         return (script, "OpenAI")
     elif ai_provider == "claude_direct":
-        result, fallback = call_claude(prompt, system_prompt, force_direct=True)
+        result, used_direct = call_claude(prompt, system_prompt, force_direct=True)
         return (result, "Claude (direct)")
     else:
-        # Default to Claude wrapper
-        result, fallback = call_claude(prompt, system_prompt)
-        provider = "Claude (direct)" if fallback else "Claude (wrapper)"
-        return (result, provider)
+        # Default to Claude wrapper (no fallback)
+        result, used_direct = call_claude(prompt, system_prompt, force_direct=False)
+        if result:
+            return (result, "Claude (wrapper)")
+        else:
+            return (result, "Claude (wrapper failed)")
 
 
 # ============================================================================
@@ -559,7 +565,7 @@ class WriterCog(commands.Cog):
         else:
             ai_provider = "claude"
         
-        # Check required API keys
+        # Check required API keys for aiwriter
         if ai_provider == "openai":
             if not os.getenv("OPENAI_API_KEY"):
                 await ctx.send("❌ OPENAI_API_KEY not set in environment")
@@ -571,10 +577,11 @@ class WriterCog(commands.Cog):
                 return
             provider_msg = "Claude (direct API)"
         else:
-            if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
-                await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
+            # Default: use wrapper, no fallback
+            if not CLAUDE_WRAPPER_PASSWORD:
+                await ctx.send("❌ CLAUDE_WRAPPER_PASSWORD not set in environment")
                 return
-            provider_msg = "Claude (wrapper)" if CLAUDE_WRAPPER_PASSWORD else "Claude (direct)"
+            provider_msg = "Claude (wrapper)"
         
         await ctx.send(f"📝 Starting AIWRITER processing with {provider_msg}...")
         logger.info(f"[aiwriter] Command invoked with provider: {ai_provider}")
@@ -679,7 +686,7 @@ class WriterCog(commands.Cog):
                     else:
                         await loop.run_in_executor(
                             _executor,
-                            lambda: update_sheet_cell(AIWRITER_SHEET, f"I{i}", f"{provider_used} generation failed")
+                            lambda: update_sheet_cell(AIWRITER_SHEET, f"I{i}", f"{provider_used} failed")
                         )
             
             await ctx.send(f"✅ AIWRITER processing complete! Processed {processed} rows.")
@@ -712,7 +719,7 @@ class WriterCog(commands.Cog):
         else:
             ai_provider = "claude"
         
-        # Check required API keys
+        # Check required API keys for ytwriter
         if ai_provider == "openai":
             if not os.getenv("OPENAI_API_KEY"):
                 await ctx.send("❌ OPENAI_API_KEY not set in environment")
@@ -724,10 +731,11 @@ class WriterCog(commands.Cog):
                 return
             provider_msg = "Claude (direct API)"
         else:
-            if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
-                await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
+            # Default: use wrapper, no fallback
+            if not CLAUDE_WRAPPER_PASSWORD:
+                await ctx.send("❌ CLAUDE_WRAPPER_PASSWORD not set in environment")
                 return
-            provider_msg = "Claude (wrapper)" if CLAUDE_WRAPPER_PASSWORD else "Claude (direct)"
+            provider_msg = "Claude (wrapper)"
         
         await ctx.send(f"📝 Starting YT Script Rewriter processing with {provider_msg}...")
         logger.info(f"[ytwriter] Command invoked with provider: {ai_provider}")
@@ -831,7 +839,7 @@ class WriterCog(commands.Cog):
                 else:
                     await loop.run_in_executor(
                         _executor,
-                        lambda: update_sheet_cell(YTWRITER_SHEET, f"G{i}", f"{provider_used} generation failed")
+                        lambda: update_sheet_cell(YTWRITER_SHEET, f"G{i}", f"{provider_used} failed")
                     )
             
             await ctx.send(f"✅ YT Script Rewriter processing complete! Processed {processed} rows.")
