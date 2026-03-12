@@ -482,7 +482,7 @@ def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str
 def _summarize_with_anthropic(transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize transcript using Anthropic Claude - wrapper first, then direct API"""
     # Use wrapper API first - get password from env variable
-    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://clrey-epstein.comaudeapi.jeff/generate")
+    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
@@ -550,13 +550,13 @@ Summary:"""
         return None
 
 
-def _identify_topics_anthropic(transcript: str, video_title: str = "", fallback_cb=None) -> Optional[list]:
+def _identify_topics_anthropic(transcript: str, video_title: str = "") -> Optional[list]:
     """Identify topics in transcript using Anthropic Claude - wrapper first, then direct API"""
     import json
     import re
     
     # Use wrapper API first - get password from env variable
-    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://clrey-epstein.comaudeapi.jeff/generate")
+    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     prompt = f"""
@@ -598,8 +598,6 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", fallback_
                     return topics
         except Exception as e:
             print(f"Wrapper API failed for topic ID: {e}. Trying direct API...", file=sys.stderr)
-            if fallback_cb:
-                fallback_cb("🔄 Wrapper failed, using direct Claude API for topics...")
     else:
         print("No CLAUDE_WRAPPER_PASSWORD set, using direct API for topics", file=sys.stderr)
     
@@ -641,11 +639,11 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", fallback_
         return None
 
 
-def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: str = "", fallback_cb=None) -> Optional[str]:
+def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: str = "") -> Optional[str]:
     """Summarize all topics using Anthropic Claude - wrapper first, then direct API"""
     
     # Use wrapper API first - get password from env variable
-    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://clrey-epstein.comaudeapi.jeff/generate")
+    wrapper_url = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
     wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
     
     topics_list = ", ".join([f'"{item["topic"]}"' for item in topics])
@@ -697,8 +695,6 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
             return response.json().get('result')
         except Exception as e:
             print(f"Wrapper API failed for summary: {e}. Trying direct API...", file=sys.stderr)
-            if fallback_cb:
-                fallback_cb("🔄 Wrapper failed, using direct Claude API for summary...")
     else:
         print("No CLAUDE_WRAPPER_PASSWORD set, using direct API for summary", file=sys.stderr)
     
@@ -787,16 +783,19 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Transcription failed. Please try again later.")
                 return
             
-            # Callback for wrapper fallback notifications
-            async def notify_fallback(msg):
-                await ctx.send(msg)
+            # Check if using wrapper or direct API
+            wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
+            if wrapper_key:
+                await ctx.send("🔐 Using Claude wrapper API...")
+            else:
+                await ctx.send("🔐 Using direct Claude API (no wrapper password set)...")
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
             # Stage 1: Identify topics
             topics = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_anthropic(transcript, video_title, notify_fallback)
+                lambda: _identify_topics_anthropic(transcript, video_title)
             )
             
             if not topics:
@@ -812,7 +811,7 @@ class SummarizationCog(commands.Cog):
                 # Stage 2: Summarize all topics
                 summary = await loop.run_in_executor(
                     _executor,
-                    lambda: _summarize_all_topics_anthropic(topics, transcript, video_title, notify_fallback)
+                    lambda: _summarize_all_topics_anthropic(topics, transcript, video_title)
                 )
             
             if summary:
@@ -946,16 +945,19 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            # Callback for wrapper fallback notifications
-            async def notify_fallback(msg):
-                await ctx.send(msg)
+            # Check if using wrapper or direct API
+            wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
+            if wrapper_key:
+                await ctx.send("🔐 Using Claude wrapper API...")
+            else:
+                await ctx.send("🔐 Using direct Claude API (no wrapper password set)...")
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
             # Stage 1: Identify topics
             topics = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_anthropic(transcript, video_title, notify_fallback)
+                lambda: _identify_topics_anthropic(transcript, video_title)
             )
             
             if not topics:
@@ -971,7 +973,7 @@ class SummarizationCog(commands.Cog):
                 # Stage 2: Summarize all topics
                 summary = await loop.run_in_executor(
                     _executor,
-                    lambda: _summarize_all_topics_anthropic(topics, transcript, video_title, notify_fallback)
+                    lambda: _summarize_all_topics_anthropic(topics, transcript, video_title)
                 )
             
             if summary:
