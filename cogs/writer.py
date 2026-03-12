@@ -2,12 +2,12 @@
 Writer Cog - AI-powered article/script generation from Google Sheets
 
 Commands:
-- !aiwriter - Reads AIWRITER sheet, scrapes URLs, optionally transcribes videos, generates articles with OpenAI
-- !ytwriter - Reads YT Script Rewriter sheet, gets YouTube transcripts, generates scripts with OpenAI
+- !aiwriter - Reads AIWRITER sheet, scrapes URLs, optionally transcribes videos, generates articles with OpenAI or Claude
+- !ytwriter - Reads YT Script Rewriter sheet, gets YouTube transcripts, generates scripts with OpenAI or Claude
 
 Uses:
 - yt-dlp for video/audio downloading
-- OpenAI GPT for article generation
+- OpenAI GPT or Claude for article generation
 - Google Sheets API for data
 - R2 for transcript storage
 - Make.com webhooks for publishing
@@ -46,6 +46,10 @@ YTWRITER_SHEET = "YT Script Rewriter"
 
 # Webhook URL (from settings or default)
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL", "https://hook.us1.make.com/fcoam5l9s9581xq94594f7u33k43cbpn")
+
+# Claude wrapper URL
+CLAUDE_WRAPPER_URL = os.getenv("CLAUDE_WRAPPER_URL", "https://claudeapi.jeffrey-epstein.com/generate")
+CLAUDE_WRAPPER_PASSWORD = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
 
 # Valid sites
 VALID_SITES = ['calf', 'doc', 'bred', 'vult', 'kz']
@@ -325,7 +329,7 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
 
 
 # ============================================================================
-# OPENAI FUNCTIONS
+# AI FUNCTIONS - OpenAI and Claude
 # ============================================================================
 
 def call_openai(prompt: str, model: str = "gpt-4o-mini") -> Optional[str]:
@@ -349,41 +353,128 @@ def call_openai(prompt: str, model: str = "gpt-4o-mini") -> Optional[str]:
         return None
 
 
-def generate_aiwriter_article(scraped_data: str, title: str, additional_context: str) -> Optional[str]:
-    """Generate article using OpenAI for aiwriter"""
+def call_claude(prompt: str, system_prompt: str = "", model: str = "sonnet") -> tuple:
+    """Call Claude API - wrapper first, then direct API
+    Returns: (response or None, used_fallback boolean)"""
+    wrapper_fallback = False
     
-    prompt = f"""You are an engaging news writer who knows how to write interesting and original stories. Write me an article with a title "{title}". Use the news sources and video transcript below as your main reference for facts and quotes:
+    # Try wrapper API first (if password is set)
+    if CLAUDE_WRAPPER_PASSWORD:
+        try:
+            response = requests.post(
+                CLAUDE_WRAPPER_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": CLAUDE_WRAPPER_PASSWORD
+                },
+                json={
+                    "prompt": prompt,
+                    "system_prompt": system_prompt
+                },
+                timeout=600
+            )
+            response.raise_for_status()
+            result = response.json().get('result')
+            logger.info("[call_claude] Claude wrapper succeeded")
+            return (result, wrapper_fallback)
+        except Exception as e:
+            logger.warning(f"Claude wrapper failed: {e}. Trying direct API...")
+            wrapper_fallback = True
+    else:
+        logger.info("No CLAUDE_WRAPPER_PASSWORD, using direct API")
+        wrapper_fallback = True
+    
+    # Fall back to direct Anthropic API
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.error("No ANTHROPIC_API_KEY for fallback")
+        return (None, wrapper_fallback)
+    
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": f"claude-{model}-4-6",
+                "max_tokens": 4000,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=120
+        )
+        response.raise_for_status()
+        data = response.json()
+        result = data["content"][0]["text"]
+        logger.info("[call_claude] Claude direct API succeeded")
+        return (result, wrapper_fallback)
+    except Exception as e:
+        logger.error(f"Claude direct API error: {e}")
+        return (None, wrapper_fallback)
+
+
+def generate_aiwriter_article(scraped_data: str, title: str, additional_context: str, ai_provider: str = "claude") -> tuple:
+    """Generate article using OpenAI or Claude
+    Returns: (article or None, provider_used string)"""
+    
+    system_prompt = """You are an engaging news writer who knows how to write interesting and original stories.
+Write me an article with the given title. Use the provided news sources and video transcript as your main reference for facts and quotes.
+Use the quotes exactly as written, but do not plagiarize. Do not invent or change the meaning of quotes.
+Do not include any mentions of drinking, street fights, fighting, or alcohol.
+Do not include the word count. Only output the article body.
+Avoid the use of M dashes. Clean up grammar in quotes, don't change wording.
+Eliminate all ai cliche phrases and sentences. Make all weight in lbs but leave kilogram value in ()s.
+ALL OUTPUT ONLY IN ENGLISH.
+Avoid using these words outside of quotes: Addicting, Addiction, Bomb, Booze, Cheat, Crime, Die, Drunk, Execute, Explode, Extreme, Gun, Hate, Hell, Insane, Kill, Naked, Profanity, Shoot, Sober, Stupid, Substance, Suffer, Torture, Victim, Shocking, Brutal"""
+
+    prompt = f"""Write me an article with a title "{title}". Use the news sources and video transcript below as your main reference:
 
 {scraped_data}
 
-Also, take into account the points and ideas from this background context:
+Also consider this background context:
 
 {additional_context}
 
-Use the quotes exactly as written, but do not plagiarize or repeat the wording from the additional context. Instead, interpret its ideas and present them in your own narrative voice. Do not invent or change the meaning of quotes. Do not include any mentions of drinking, street fights, fighting, or alcohol. Do not include the word count. Do not output the title or restate "{title}". Only output the article body. Avoid the use of M dashes. Clean up grammar in quotes, don't change wording. Eliminate all ai cliche phrases and sentences. Make all weight in lbs but leave kilogram value in ()s. ALL OUTPUT ONLY IN ENGLISH.
+Only output the article body. Do not output the title."""
 
-Avoid using any of the following words outside of quotes Addicting/Addiction Bomb Booze/Boozy Cheat/Cheating Click Crime Die/Died/Dead Download [Drug name] Drunk/Drunken Execute/Execution Explode/Explosion Extreme Gun Hangover/Hungover Hate/Hatred Hell Insane Jerk Kill/Killer Naked [Profanity/Expletive] Shoot Shot/Shots Sober Stream Stupid Substance Suffer Torture Victim Shocking Brutal"""
+    if ai_provider == "openai":
+        article = call_openai(prompt)
+        return (article, "OpenAI")
+    else:
+        # Default to Claude
+        result, fallback = call_claude(prompt, system_prompt)
+        provider = "Claude (direct)" if fallback else "Claude (wrapper)"
+        return (result, provider)
+
+
+def generate_ytwriter_script(transcript: str, title: str, custom_prompt: str, ai_provider: str = "claude") -> tuple:
+    """Generate script using OpenAI or Claude
+    Returns: (script or None, provider_used string)"""
     
-    return call_openai(prompt)
+    system_prompt = """You are a skilled script writer. Write a 300-500 word article from the provided transcript.
+Do not give word counts. Do not repeat instructions back. Only give your output.
+Do not invent, paraphrase or change quotes. Avoid M dashes. Clean up grammar.
+Eliminate all ai cliche phrases. Make weight in lbs with kilogram in (). ENGLISH ONLY.
+Avoid: Addiction, Bomb, Booze, Crime, Die, Drunk, Execute, Explode, Gun, Hate, Kill, Shoot, Sober, Stupid, Brutal"""
 
-
-def generate_ytwriter_script(transcript: str, title: str, custom_prompt: str) -> Optional[str]:
-    """Generate script using OpenAI for ytwriter"""
-    
-    prompt = f"""
-You have been provided with a transcript where you are to write a 300 to 500 word article corresponding to this title: {title}.
+    prompt = f"""Write a 300-500 word article corresponding to this title: {title}
 
 {custom_prompt}
 
 Transcript:
-{transcript}
+{transcript}"""
 
-Do not give me word counts. Do not repeat my instructions back to me. Only give me your output. Do not invent, paraphase or change the wording of quotes. Do not deviate and cover other topics in subheadings. Avoid the use of M dashes. Clean up grammar in quotes, don't change wording. Eliminate all ai cliche phrases and sentences. Make all weight in lbs but leave kilogram value in ()s. ALL OUTPUT ONLY IN ENGLISH.
-
-Avoid using any of the following words outside of quotes Addicting/Addiction Bomb Booze/Boozy Cheat/Cheating Click Crime Die/Died/Dead Download [Drug name] Drunk/Drunken Execute/Execution Explode/Explosion Extreme Gun Hangover/Hungover Hate/Hatred Hell Insane Jerk Kill/Killer Naked [Profanity/Expletive] Shoot Shot/Shots Sober Stream Stupid Substance Suffer Torture Victim Shocking Brutal
-"""
-    
-    return call_openai(prompt)
+    if ai_provider == "openai":
+        script = call_openai(prompt)
+        return (script, "OpenAI")
+    else:
+        # Default to Claude
+        result, fallback = call_claude(prompt, system_prompt)
+        provider = "Claude (direct)" if fallback else "Claude (wrapper)"
+        return (result, provider)
 
 
 # ============================================================================
@@ -438,25 +529,36 @@ class WriterCog(commands.Cog):
     
     @commands.command(
         name='aiwriter',
-        help='Process AIWRITER sheet - scrape URLs, transcribe videos, generate articles with OpenAI',
-        description='Reads Google Sheet, scrapes articles, optionally transcribes videos, generates articles using OpenAI',
-        usage='!aiwriter',
-        brief='!aiwriter'
+        help='Process AIWRITER sheet - use -openai for OpenAI (default: Claude)',
+        description='Reads Google Sheet, scrapes articles, generates articles with OpenAI or Claude',
+        usage='!aiwriter [-openai]',
+        brief='!aiwriter [-openai]'
     )
-    async def aiwriter_command(self, ctx):
-        """!aiwriter - Generate articles from scraped content and video transcripts"""
+    async def aiwriter_command(self, ctx, option: str = None):
+        """!aiwriter - Generate articles from scraped content and video transcripts
+        Use -openai to use OpenAI instead of Claude"""
         
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
-        # Check API key
-        if not os.getenv("OPENAI_API_KEY"):
-            await ctx.send("❌ OPENAI_API_KEY not set in environment")
-            return
+        # Determine AI provider
+        ai_provider = "openai" if option and option.lower() == "-openai" else "claude"
         
-        await ctx.send("📝 Starting AIWRITER processing with OpenAI...")
-        logger.info("[aiwriter] Command invoked")
+        # Check required API keys
+        if ai_provider == "openai":
+            if not os.getenv("OPENAI_API_KEY"):
+                await ctx.send("❌ OPENAI_API_KEY not set in environment")
+                return
+            provider_msg = "OpenAI (gpt-4o-mini)"
+        else:
+            if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
+                await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
+                return
+            provider_msg = "Claude (wrapper)" if CLAUDE_WRAPPER_PASSWORD else "Claude (direct)"
+        
+        await ctx.send(f"📝 Starting AIWRITER processing with {provider_msg}...")
+        logger.info(f"[aiwriter] Command invoked with provider: {ai_provider}")
         
         loop = asyncio.get_event_loop()
         last_update = [0]
@@ -521,12 +623,12 @@ class WriterCog(commands.Cog):
                         lambda: update_sheet_cell(AIWRITER_SHEET, f"H{i}", combined_output)
                     )
                 
-                # Generate article with OpenAI
+                # Generate article with AI
                 if title:
-                    await self._progress_update(ctx, f"Row {i}: Generating article with OpenAI...", last_update, buffer)
-                    article = await loop.run_in_executor(
+                    await self._progress_update(ctx, f"Row {i}: Generating article with {provider_msg}...", last_update, buffer)
+                    article, provider_used = await loop.run_in_executor(
                         _executor,
-                        lambda: generate_aiwriter_article(combined_output, title, additional_context)
+                        lambda: generate_aiwriter_article(combined_output, title, additional_context, ai_provider)
                     )
                     
                     if article:
@@ -558,7 +660,7 @@ class WriterCog(commands.Cog):
                     else:
                         await loop.run_in_executor(
                             _executor,
-                            lambda: update_sheet_cell(AIWRITER_SHEET, f"I{i}", "OpenAI generation failed")
+                            lambda: update_sheet_cell(AIWRITER_SHEET, f"I{i}", f"{provider_used} generation failed")
                         )
             
             await ctx.send(f"✅ AIWRITER processing complete! Processed {processed} rows.")
@@ -570,25 +672,36 @@ class WriterCog(commands.Cog):
     
     @commands.command(
         name='ytwriter',
-        help='Process YT Script Rewriter sheet - get transcripts, generate scripts with OpenAI',
-        description='Reads Google Sheet, fetches YouTube transcripts, generates scripts using OpenAI',
-        usage='!ytwriter',
-        brief='!ytwriter'
+        help='Process YT Script Rewriter sheet - use -openai for OpenAI (default: Claude)',
+        description='Reads Google Sheet, fetches transcripts, generates scripts with OpenAI or Claude',
+        usage='!ytwriter [-openai]',
+        brief='!ytwriter [-openai]'
     )
-    async def ytwriter_command(self, ctx):
-        """!ytwriter - Generate scripts from YouTube transcripts"""
+    async def ytwriter_command(self, ctx, option: str = None):
+        """!ytwriter - Generate scripts from YouTube transcripts
+        Use -openai to use OpenAI instead of Claude"""
         
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
         
-        # Check API key
-        if not os.getenv("OPENAI_API_KEY"):
-            await ctx.send("❌ OPENAI_API_KEY not set in environment")
-            return
+        # Determine AI provider
+        ai_provider = "openai" if option and option.lower() == "-openai" else "claude"
         
-        await ctx.send("📝 Starting YT Script Rewriter processing with OpenAI...")
-        logger.info("[ytwriter] Command invoked")
+        # Check required API keys
+        if ai_provider == "openai":
+            if not os.getenv("OPENAI_API_KEY"):
+                await ctx.send("❌ OPENAI_API_KEY not set in environment")
+                return
+            provider_msg = "OpenAI (gpt-4o-mini)"
+        else:
+            if not CLAUDE_WRAPPER_PASSWORD and not os.getenv("ANTHROPIC_API_KEY"):
+                await ctx.send("❌ Neither CLAUDE_WRAPPER_PASSWORD nor ANTHROPIC_API_KEY set")
+                return
+            provider_msg = "Claude (wrapper)" if CLAUDE_WRAPPER_PASSWORD else "Claude (direct)"
+        
+        await ctx.send(f"📝 Starting YT Script Rewriter processing with {provider_msg}...")
+        logger.info(f"[ytwriter] Command invoked with provider: {ai_provider}")
         
         loop = asyncio.get_event_loop()
         last_update = [0]
@@ -637,11 +750,11 @@ class WriterCog(commands.Cog):
                     )
                     continue
                 
-                # Generate script with OpenAI
-                await self._progress_update(ctx, f"Row {i}: Generating script with OpenAI...", last_update, buffer)
-                script = await loop.run_in_executor(
+                # Generate script with AI
+                await self._progress_update(ctx, f"Row {i}: Generating script with {provider_msg}...", last_update, buffer)
+                script, provider_used = await loop.run_in_executor(
                     _executor,
-                    lambda: generate_ytwriter_script(transcript, title, prompt)
+                    lambda: generate_ytwriter_script(transcript, title, prompt, ai_provider)
                 )
                 
                 if script:
@@ -689,7 +802,7 @@ class WriterCog(commands.Cog):
                 else:
                     await loop.run_in_executor(
                         _executor,
-                        lambda: update_sheet_cell(YTWRITER_SHEET, f"G{i}", "OpenAI generation failed")
+                        lambda: update_sheet_cell(YTWRITER_SHEET, f"G{i}", f"{provider_used} generation failed")
                     )
             
             await ctx.send(f"✅ YT Script Rewriter processing complete! Processed {processed} rows.")
