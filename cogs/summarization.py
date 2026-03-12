@@ -91,19 +91,22 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
     if not video_id:
         return None, "YouTube API failed"
     
-    # Get proxy from environment or use default
+    # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
-    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://121b956a303a4c259154__cr.us:962f0ae501d13622@gw.dataimpulse.com:10022")
+    proxy_url = os.getenv("YOUTUBE_PROXY", "")
     
     try:
-        from youtube_transcript_api.proxies import GenericProxyConfig
-        
-        ytt_api = YouTubeTranscriptApi(
-            proxy_config=GenericProxyConfig(
-                http_url=proxy_url,
-                https_url=proxy_url,
+        if proxy_url:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            ytt_api = YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(
+                    http_url=proxy_url,
+                    https_url=proxy_url,
+                )
             )
-        )
+        else:
+            ytt_api = YouTubeTranscriptApi()
+            
         fetched_transcript = ytt_api.fetch(video_id)
         
         # Convert to plain text
@@ -131,9 +134,9 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
     if not video_id:
         return None, "yt-dlp failed"
     
-    # Get proxy from environment or use default
+    # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
-    proxy_url = os.getenv("YOUTUBE_PROXY", "socks5://121b956a303a4c259154__cr.us:962f0ae501d13622@gw.dataimpulse.com:10022")
+    proxy_url = os.getenv("YOUTUBE_PROXY", "")
     
     ydl_opts = {
         'writesubtitles': True,
@@ -143,9 +146,12 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
         'outtmpl': f'/tmp/{video_id}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
-        'proxy': proxy_url,
         'socket_timeout': 30,
     }
+    
+    # Only add proxy if configured
+    if proxy_url:
+        ydl_opts['proxy'] = proxy_url
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
