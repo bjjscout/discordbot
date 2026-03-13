@@ -25,7 +25,7 @@ import re
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 # Import configuration and logging
 try:
@@ -293,47 +293,14 @@ def download_text_file(url: str) -> Optional[str]:
         return None
 
 
-def transcribe_with_whisperx_api(audio_path: str) -> Optional[str]:
-    """Transcribe audio using WhisperX API (file upload)"""
+def transcribe_with_whisperx_url(video_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Transcribe video directly from URL using WhisperX API
+    Works with YouTube, Instagram, and any direct video URL
+    Returns: (transcript_text or None, r2_url_to_transcript or None)"""
     import time
     
     WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
-    
-    try:
-        # Submit transcription job
-        with open(audio_path, 'rb') as f:
-            files = {'file': f}
-            data = {'model': 'large-v3', 'task': 'transcribe'}
-            response = requests.post(
-                f"{WHISPERX_API_URL}/transcribe/file",
-                files=files,
-                data=data,
-                timeout=300
-            )
-        
-        if response.ok:
-            result = response.json()
-            job_id = result.get('job_id')
-            if job_id:
-                # Poll for completion
-                while True:
-                    status_response = requests.get(f"{WHISPERX_API_URL}/jobs/{job_id}", timeout=30)
-                    status_data = status_response.json()
-                    if status_data.get('status') == 'completed':
-                        return status_data.get('result', {}).get('text', '')
-                    elif status_data.get('status') == 'failed':
-                        return None
-                    time.sleep(5)
-        return None
-    except Exception as e:
-        logger.error(f"WhisperX API error: {e}")
-        return None
-
-
-def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
-    """Transcribe video directly from URL using WhisperX API
-    Works with YouTube, Instagram, and any direct video URL"""
-    WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
+    r2_transcript_url = None
     
     try:
         # Submit transcription job with URL directly
@@ -364,43 +331,44 @@ def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
                         # Get the result - can be direct text or URLs
                         job_result = status_data.get('result', {})
                         if isinstance(job_result, dict):
-                            # Check for preview or download the txt
-                            preview = job_result.get('preview', '')
-                            if preview:
-                                return preview
-                            # Try to get text from URLs
+                            # Check for R2 URL to transcript
                             urls = job_result.get('urls', {})
                             if urls.get('txt'):
-                                # Download the txt file
-                                txt_url = urls['txt']
-                                txt_response = requests.get(txt_url, timeout=30)
+                                r2_transcript_url = urls['txt']
+                                # Download the txt from R2
+                                txt_response = requests.get(r2_transcript_url, timeout=30)
                                 if txt_response.ok:
-                                    return txt_response.text
-                        return str(job_result)
+                                    return (txt_response.text, r2_transcript_url)
+                            # Fallback to preview
+                            preview = job_result.get('preview', '')
+                            if preview:
+                                return (preview, None)
+                        return (str(job_result), r2_transcript_url)
                     elif status == 'failed':
                         error = status_data.get('error', 'Unknown error')
                         logger.error(f"WhisperX job failed: {error}")
-                        return None
+                        return (None, None)
                     elif status in ['queued', 'downloading', 'processing']:
                         logger.info(f"WhisperX job status: {status}")
                         time.sleep(5)
                         retry_count += 1
                     else:
                         logger.warning(f"Unknown WhisperX status: {status}")
-                        return None
+                        return (None, None)
                 
                 logger.error(f"WhisperX job timed out after {max_retries} retries")
-                return None
+                return (None, None)
         else:
             logger.error(f"WhisperX API error: {response.status_code} - {response.text}")
-            return None
+            return (None, None)
     except Exception as e:
         logger.error(f"WhisperX URL transcription error: {e}")
-        return None
+        return (None, None)
 
 
-def get_transcript_for_video(video_url: str) -> Optional[str]:
-    """Get transcript - handles video URLs, text URLs, and plain text"""
+def get_transcript_for_video(video_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Get transcript - handles video URLs, text URLs, and plain text
+    Returns: (transcript_text or None, r2_url or None)"""
     
     # Clean URL - remove common trailing stuff that might affect detection
     clean_url = video_url.strip()
@@ -412,7 +380,8 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
         '/text/' in clean_url or
         '/raw/' in clean_url and '.txt' in clean_url.lower()):
         logger.info(f"Detected text file URL, downloading: {clean_url}")
-        return download_text_file(clean_url)
+        text = download_text_file(clean_url)
+        return (text, clean_url)  # Return the URL as the R2 URL
     
     # Check if it's a YouTube URL
     video_id = get_video_id(clean_url)
@@ -422,7 +391,7 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
         transcript = get_youtube_transcript(video_id)
         if transcript:
             logger.info(f"Got transcript from YouTube API for {video_id}")
-            return transcript
+            return (transcript, None)  # No R2 URL for YouTube Transcript API
     
     # Check if it looks like a URL (has http/https)
     if clean_url.startswith('http://') or clean_url.startswith('https://'):
@@ -432,7 +401,7 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
     
     # Otherwise, treat as plain text transcript
     logger.info(f"Using as plain text transcript")
-    return video_url
+    return (video_url, None)  # Return input as transcript, no R2 URL
 
 
 # ============================================================================
@@ -742,7 +711,7 @@ class WriterCog(commands.Cog):
                 # Process video if provided
                 if video_link:
                     await self._progress_update(ctx, f"Row {i}: Getting video transcript...", last_update, buffer)
-                    transcript = await loop.run_in_executor(
+                    transcript, _ = await loop.run_in_executor(
                         _executor,
                         lambda: get_transcript_for_video(video_link)
                     )
@@ -882,7 +851,7 @@ class WriterCog(commands.Cog):
                 
                 # Get transcript
                 await self._progress_update(ctx, f"Row {i}: Getting transcript...", last_update, buffer)
-                transcript = await loop.run_in_executor(
+                transcript, r2_url = await loop.run_in_executor(
                     _executor,
                     lambda: get_transcript_for_video(link)
                 )
@@ -909,16 +878,15 @@ class WriterCog(commands.Cog):
                     )
                     
                     # Save transcript URL to column F
-                    # If link is already an R2 URL (text file), use it directly
-                    if '.txt' in link.lower() or 'textfile' in link.lower():
-                        # The link is already an R2 URL to the transcript
+                    # r2_url is returned from get_transcript_for_video
+                    if r2_url:
                         await loop.run_in_executor(
                             _executor,
-                            lambda: update_sheet_cell(YTWRITER_SHEET, f"F{i}", link)
+                            lambda: update_sheet_cell(YTWRITER_SHEET, f"F{i}", r2_url)
                         )
-                        logger.info(f"Saved transcript URL to column F: {link[:50]}...")
+                        logger.info(f"Saved transcript R2 URL to column F: {r2_url[:50]}...")
                     else:
-                        logger.info("Transcript was processed by WhisperX - R2 URL would come from API response")
+                        logger.info("No R2 URL available for transcript")
                     
                     # Send webhook if site specified
                     if site in VALID_SITES:
