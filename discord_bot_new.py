@@ -272,6 +272,28 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     
+    # Scripts commands
+    embed.add_field(
+        name="Scripts (DM only)",
+        value="""```
+!wrap1         - Execute wrapper.py script
+!wrap2         - Execute wrapper2.py script
+!salvage       - Execute salvage.py script
+!closefirefox  - Close all Firefox browsers
+```""",
+        inline=False
+    )
+    
+    # Webhooks commands
+    embed.add_field(
+        name="Webhooks (DM only)",
+        value="""```
+!podclip       - Create viral clips from YT URL
+!cleartweets   - Clear scanned tweet sheet
+```""",
+        inline=False
+    )
+    
     await ctx.send(embed=embed)
 
 
