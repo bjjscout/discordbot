@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor # For type hint
 # Define webhook URLs (Consider moving to .env or config)
 SEND_SHEET_WEBHOOK_URL = 'https://n8n.jeffrey-epstein.com/webhook/84bc4496-104f-4c28-bfc8-94d9fd693bd8'
 PROCESS_SHEET2_WEBHOOK_URL = 'https://n8n.jeffrey-epstein.com/webhook-test/d5f3ae63-ca09-420a-9a83-2ef5febb517c'
+CLEAR_TWEETS_WEBHOOK_URL = 'https://hook.us1.make.com/ikecdi2ugoqilxud9r22o6s65hfiqbhn'
 
 class WebhooksCog(commands.Cog):
     """Cog for handling simple webhook trigger commands."""
@@ -528,6 +529,45 @@ class WebhooksCog(commands.Cog):
              await ctx.send(f"An unexpected error occurred: {str(e)}")
              print(f"Error details (!xshot): {e}", file=sys.stderr)
              traceback.print_exc(file=sys.stderr) # Add traceback
+
+    @commands.command(
+        name='cleartweets',
+        help='clears scanned top tweet sheet',
+        description='via a make.com webhook, needs no additional arguments',
+        brief='!cleartweets'
+    )
+    async def cleartweets_webhook_command(self, ctx):
+        # Check if command is used in DMs
+        if not isinstance(ctx.channel, discord.DMChannel):
+            await ctx.send("This command can only be used in DMs.")
+            return
+
+        webhook_url = CLEAR_TWEETS_WEBHOOK_URL
+        payload = {
+            "user_id": str(ctx.author.id)
+        }
+
+        try:
+            # Use requests.post for sending data to a webhook
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                self.bot.executor,
+                lambda: requests.post(webhook_url, json=payload, timeout=30)
+            )
+            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            await ctx.send("Make is clearing the tweetsheet. Wait...")
+        except requests.exceptions.Timeout:
+            await ctx.send("Error: Request to webhook timed out.")
+        except requests.RequestException as e:
+            error_message = f"Failed to send to webhook. Error: {str(e)}"
+            if hasattr(e, 'response') and e.response is not None:
+                error_message += f"\nResponse status code: {e.response.status_code}\nResponse content: {e.response.text}"
+            await ctx.send(error_message)
+            print(f"Error details (!cleartweets): {e}", file=sys.stderr)
+        except Exception as e:
+            await ctx.send(f"An unexpected error occurred: {str(e)}")
+            print(f"Error details (!cleartweets): {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
 
 # The mandatory setup function called by discord.py when loading the Cog

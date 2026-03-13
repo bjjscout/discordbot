@@ -96,11 +96,12 @@ async def load_cogs():
         'video',      # !process_sheet only (process_video disabled)
         # 'twitter',    # Disabled - !tweet, !tweetsheet
         # 'instagram',  # Disabled - !ig, !igmake
-        # 'raptive',    # Disabled - !rapcalf, !rapdoc
-        # 'scripts',    # Disabled - !aiwriter, !flux
+        # 'raptive',   # Disabled - !rapcalf, !rapdoc
+        'scripts',    # !wrap1, !wrap2, !salvage, !closefirefox
+        'writer',     # !aiwriter, !ytwriter - refactored with OpenAI only
         'summarization', # !sum, !sum2, !sumw
         'utility',    # Utility commands
-        # 'webhooks',   # Disabled - Webhook triggers
+        'webhooks',   # !podclip, !cleartweets
         'whisper',    # !whisper - WhisperX API transcription
     ]
     
@@ -110,6 +111,10 @@ async def load_cogs():
             logger.info(f"Loaded cog: cogs.{cog_name}")
         except Exception as e:
             logger.warning(f"Could not load cog {cog_name}: {e}")
+            # Print to stderr so it's more visible
+            import traceback
+            print(f"ERROR loading cog {cog_name}:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
     
     logger.info(f"Loaded {len(bot.cogs)} cogs")
 
