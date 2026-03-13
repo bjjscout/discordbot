@@ -17,6 +17,7 @@ import sys
 import asyncio
 import logging
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 # Ensure the current directory is in the path
 current_dir = Path(__file__).parent.resolve()
@@ -78,6 +79,9 @@ bot = commands.Bot(
     help_command=None,
     case_insensitive=True,
 )
+
+# Attach ThreadPoolExecutor for cogs that need it
+bot.executor = ThreadPoolExecutor(max_workers=5)
 
 # ============================================================
 # COG LOADING - Uses YOUR existing Cogs
