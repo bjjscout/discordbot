@@ -23,6 +23,7 @@ import io
 import uuid
 import re
 import traceback
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, List
 
@@ -306,7 +307,7 @@ def transcribe_with_whisperx_api(audio_path: str) -> Optional[str]:
                         return status_data.get('result', {}).get('text', '')
                     elif status_data.get('status') == 'failed':
                         return None
-                    asyncio.sleep(5)
+                    time.sleep(5)
         return None
     except Exception as e:
         logger.error(f"WhisperX API error: {e}")
@@ -366,7 +367,7 @@ def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
                         return None
                     elif status in ['queued', 'downloading', 'processing']:
                         logger.info(f"WhisperX job status: {status}")
-                        asyncio.sleep(5)
+                        time.sleep(5)
                         retry_count += 1
                     else:
                         logger.warning(f"Unknown WhisperX status: {status}")
