@@ -36,13 +36,6 @@ except ImportError as e:
     get_settings = None
     get_logger = None
 
-# Try to import R2 upload (optional - will skip if not available)
-try:
-    from cogs.utility import upload_to_r2
-except ImportError as e:
-    print(f"Warning: Could not import upload_to_r2: {e}", file=sys.stderr)
-    upload_to_r2 = None
-
 logger = get_logger(__name__) if get_logger else None
 settings = get_settings() if get_settings else None
 
@@ -915,31 +908,17 @@ class WriterCog(commands.Cog):
                         lambda: update_sheet_cell(YTWRITER_SHEET, f"E{i}", script)
                     )
                     
-                    # Upload transcript to R2 (optional - skip if credentials missing)
-                    try:
-                        r2_access = os.getenv('R2_ACCESS_KEY_ID')
-                        r2_secret = os.getenv('R2_SECRET_ACCESS_KEY')
-                        r2_endpoint = os.getenv('R2_ENDPOINT_URL')
-                        r2_bucket = os.getenv('R2_BUCKET_NAME')
-                        
-                        if all([r2_access, r2_secret, r2_endpoint, r2_bucket]):
-                            video_id = get_video_id(link) or "direct"
-                            r2_url = await loop.run_in_executor(
-                                _executor,
-                                lambda: upload_to_r2_from_bytesio(
-                                    transcript.encode('utf-8'), 
-                                    f"transcript_{video_id}.txt"
-                                )
-                            )
-                            if r2_url:
-                                await loop.run_in_executor(
-                                    _executor,
-                                    lambda: update_sheet_cell(YTWRITER_SHEET, f"F{i}", r2_url)
-                                )
-                        else:
-                            logger.warning("R2 credentials not configured, skipping transcript upload")
-                    except Exception as e:
-                        logger.error(f"R2 upload error: {e}")
+                    # Save transcript URL to column F
+                    # If link is already an R2 URL (text file), use it directly
+                    if '.txt' in link.lower() or 'textfile' in link.lower():
+                        # The link is already an R2 URL to the transcript
+                        await loop.run_in_executor(
+                            _executor,
+                            lambda: update_sheet_cell(YTWRITER_SHEET, f"F{i}", link)
+                        )
+                        logger.info(f"Saved transcript URL to column F: {link[:50]}...")
+                    else:
+                        logger.info("Transcript was processed by WhisperX - R2 URL would come from API response")
                     
                     # Send webhook if site specified
                     if site in VALID_SITES:
