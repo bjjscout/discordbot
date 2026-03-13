@@ -231,56 +231,22 @@ def get_youtube_transcript(video_id: str) -> Optional[str]:
         return None
 
 
-def download_video_audio(url: str, temp_dir: str = "/tmp") -> Optional[str]:
-    """Download video/audio using yt-dlp"""
-    import yt_dlp
-    
-    video_id = get_video_id(url)
-    if not video_id:
-        # Try as direct URL
-        video_id = "direct_" + str(uuid.uuid4())[:8]
-    
-    output_path = os.path.join(temp_dir, f"{video_id}.%(ext)s")
-    
-    proxy_url = os.getenv("YOUTUBE_PROXY", "")
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
-        'socket_timeout': 30,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'wav',
-        }],
-    }
-    
-    if proxy_url:
-        ydl_opts['proxy'] = proxy_url
-    
+def download_text_file(url: str) -> Optional[str]:
+    """Download and return text file content"""
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        
-        # Find the downloaded file
-        wav_path = os.path.join(temp_dir, f"{video_id}.wav")
-        if os.path.exists(wav_path):
-            return wav_path
-        
-        # Check for other audio formats
-        for ext in ['mp3', 'm4a', 'ogg']:
-            alt_path = os.path.join(temp_dir, f"{video_id}.{ext}")
-            if os.path.exists(alt_path):
-                return alt_path
-        
+        response = requests.get(url, timeout=30)
+        if response.ok:
+            return response.text
         return None
     except Exception as e:
-        logger.error(f"yt-dlp download error: {e}", url=url)
+        logger.error(f"Error downloading text file: {e}")
         return None
 
 
 def transcribe_with_whisperx_api(audio_path: str) -> Optional[str]:
     """Transcribe audio using WhisperX API (file upload)"""
+    import time
+    
     WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
     
     try:
@@ -384,7 +350,14 @@ def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
 
 
 def get_transcript_for_video(video_url: str) -> Optional[str]:
-    """Get transcript - try YouTube API first, then WhisperX URL API"""
+    """Get transcript - handles video URLs, text URLs, and plain text"""
+    
+    # Check if it's a text file URL
+    if video_url.lower().endswith('.txt') or 'textfile' in video_url.lower():
+        logger.info(f"Detected text file URL, downloading: {video_url}")
+        return download_text_file(video_url)
+    
+    # Check if it's a YouTube URL
     video_id = get_video_id(video_url)
     
     if video_id:
@@ -394,9 +367,15 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
             logger.info(f"Got transcript from YouTube API for {video_id}")
             return transcript
     
-    # Use WhisperX API directly with URL (works for any video URL)
-    logger.info(f"Using WhisperX API for: {video_url}")
-    return transcribe_with_whisperx_url(video_url)
+    # Check if it looks like a URL (has http/https)
+    if video_url.startswith('http://') or video_url.startswith('https://'):
+        # Use WhisperX API for video URLs
+        logger.info(f"Using WhisperX API for: {video_url}")
+        return transcribe_with_whisperx_url(video_url)
+    
+    # Otherwise, treat as plain text transcript
+    logger.info(f"Using as plain text transcript")
+    return video_url
 
 
 # ============================================================================
