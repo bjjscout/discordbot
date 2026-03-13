@@ -64,10 +64,12 @@ def get_google_sheets_service():
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
     
-    # First check settings, then check env var directly
+    # First check settings, then check env var directly, then use default path
     creds_path = settings.google.credentials_path
     if not creds_path:
         creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+    if not creds_path:
+        creds_path = "/app/credentials/google-service-account.json"
     
     if not creds_path or not os.path.exists(creds_path):
         raise Exception(f"Google credentials file not found: {creds_path}")
