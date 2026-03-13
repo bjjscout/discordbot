@@ -258,6 +258,20 @@ async def help_command(ctx: commands.Context):
         inline=False
     )
     
+    # Writer commands
+    embed.add_field(
+        name="Writer (DM only)",
+        value="""```
+!aiwriter         - Generate articles (Claude wrapper)
+!aiwriter -openai - Generate articles (OpenAI)
+!aiwriter -direct - Generate articles (Claude direct)
+!ytwriter         - Generate scripts (Claude wrapper)
+!ytwriter -openai - Generate scripts (OpenAI)
+!ytwriter -direct - Generate scripts (Claude direct)
+```""",
+        inline=False
+    )
+    
     await ctx.send(embed=embed)
 
 
