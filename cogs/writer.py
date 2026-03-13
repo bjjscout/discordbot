@@ -83,6 +83,11 @@ def upload_to_r2_from_bytesio(content: bytes, destination: str) -> str:
     """Upload bytes content to R2 using boto3 directly"""
     import boto3
     from botocore.client import Config
+    from dotenv import load_dotenv
+    import os
+    
+    # Load environment variables from .env
+    load_dotenv()
     
     r2_access_key = os.getenv('R2_ACCESS_KEY_ID')
     r2_secret_key = os.getenv('R2_SECRET_ACCESS_KEY')
