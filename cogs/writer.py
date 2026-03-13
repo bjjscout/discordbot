@@ -64,7 +64,11 @@ def get_google_sheets_service():
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
     
+    # First check settings, then check env var directly
     creds_path = settings.google.credentials_path
+    if not creds_path:
+        creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+    
     if not creds_path or not os.path.exists(creds_path):
         raise Exception(f"Google credentials file not found: {creds_path}")
     
@@ -78,7 +82,11 @@ def get_google_sheets_service():
 def read_sheet(sheet_name: str, range_name: str = "A2:H") -> List[List[str]]:
     """Read data from Google Sheet"""
     service = get_google_sheets_service()
+    
+    # First check settings, then check env var directly
     spreadsheet_id = settings.google.spreadsheet_id
+    if not spreadsheet_id:
+        spreadsheet_id = os.getenv("SPREADSHEET_ID", "")
     
     if not spreadsheet_id:
         raise Exception("SPREADSHEET_ID not configured")
@@ -95,7 +103,11 @@ def read_sheet(sheet_name: str, range_name: str = "A2:H") -> List[List[str]]:
 def update_sheet_cell(sheet_name: str, cell: str, value: str):
     """Update a cell in Google Sheet"""
     service = get_google_sheets_service()
+    
+    # First check settings, then check env var directly
     spreadsheet_id = settings.google.spreadsheet_id
+    if not spreadsheet_id:
+        spreadsheet_id = os.getenv("SPREADSHEET_ID", "")
     
     range_name = f"'{sheet_name}'!{cell}"
     body = {'values': [[value]]}
