@@ -102,9 +102,9 @@ async def load_cogs():
         # 'instagram',  # Disabled - !ig, !igmake
         # 'raptive',   # Disabled - !rapcalf, !rapdoc
         'scripts',    # !wrap1, !wrap2, !salvage, !closefirefox
-        'writer',     # !aiwriter, !ytwriter - refactored with OpenAI only
+        # 'writer',   # Disabled - !aiwriter (conflict with summarization)
         'summarization', # !sum, !sum2, !sumw
-        'utility',    # Utility commands
+        # 'utility',  # Disabled - missing 'together' module
         'webhooks',   # !podclip, !cleartweets
         'whisper',    # !whisper - WhisperX API transcription
     ]
@@ -258,20 +258,6 @@ async def help_command(ctx: commands.Context):
 !sumw <url>    - Whisper transcription
 !sum <url>     - OpenAI GPT summary
 !sum2 <url>    - Claude Sonnet summary
-```""",
-        inline=False
-    )
-    
-    # Writer commands
-    embed.add_field(
-        name="Writer (DM only)",
-        value="""```
-!aiwriter         - Generate articles (Claude wrapper)
-!aiwriter -openai - Generate articles (OpenAI)
-!aiwriter -direct - Generate articles (Claude direct)
-!ytwriter         - Generate scripts (Claude wrapper)
-!ytwriter -openai - Generate scripts (OpenAI)
-!ytwriter -direct - Generate scripts (Claude direct)
 ```""",
         inline=False
     )
