@@ -31,12 +31,31 @@ from typing import Optional, Dict, Any, List
 try:
     from utils.config import get_settings
     from utils.logging_config import get_logger
-    from utils.utility import upload_to_r2
 except ImportError as e:
     print(f"Error importing utils in WriterCog: {e}", file=sys.stderr)
+    get_settings = None
+    get_logger = None
 
-logger = get_logger(__name__)
-settings = get_settings()
+# Try to import R2 upload (optional - will skip if not available)
+try:
+    from cogs.utility import upload_to_r2
+except ImportError as e:
+    print(f"Warning: Could not import upload_to_r2: {e}", file=sys.stderr)
+    upload_to_r2 = None
+
+logger = get_logger(__name__) if get_logger else None
+settings = get_settings() if get_settings else None
+
+# Create a safe logger wrapper that handles None
+class SafeLogger:
+    def __getattr__(self, name):
+        return lambda msg, **kwargs: print(f"{name.upper()}: {msg}")
+
+safe_logger = SafeLogger()
+
+# Use safe_logger as logger if logger is None
+if logger is None:
+    logger = safe_logger
 
 # Module-level executor
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -57,6 +76,39 @@ VALID_SITES = ['calf', 'doc', 'bred', 'vult', 'kz']
 
 
 # ============================================================================
+# R2 UPLOAD FUNCTION (for BytesIO content)
+# ============================================================================
+
+def upload_to_r2_from_bytesio(content: bytes, destination: str) -> str:
+    """Upload bytes content to R2 using boto3 directly"""
+    import boto3
+    from botocore.client import Config
+    
+    r2_access_key = os.getenv('R2_ACCESS_KEY_ID')
+    r2_secret_key = os.getenv('R2_SECRET_ACCESS_KEY')
+    r2_endpoint = os.getenv('R2_ENDPOINT_URL')
+    r2_bucket = os.getenv('R2_BUCKET_NAME')
+    
+    if not all([r2_access_key, r2_secret_key, r2_endpoint, r2_bucket]):
+        raise Exception("Missing R2 credentials")
+    
+    s3 = boto3.client(
+        's3',
+        endpoint_url=r2_endpoint,
+        aws_access_key_id=r2_access_key,
+        aws_secret_access_key=r2_secret_key,
+        region_name='auto',
+        config=Config(s3={'addressing_style': 'virtual'})
+    )
+    
+    s3.put_object(Bucket=r2_bucket, Key=destination, Body=content)
+    
+    # Return public URL
+    public_url = f"{r2_endpoint}/{r2_bucket}/{destination}"
+    return public_url
+
+
+# ============================================================================
 # GOOGLE SHEETS FUNCTIONS
 # ============================================================================
 
@@ -66,7 +118,7 @@ def get_google_sheets_service():
     from googleapiclient.discovery import build
     
     # First check settings, then check env var directly, then use default path
-    creds_path = settings.google.credentials_path
+    creds_path = settings.google.credentials_path if settings else None
     if not creds_path:
         creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
     if not creds_path:
@@ -87,7 +139,7 @@ def read_sheet(sheet_name: str, range_name: str = "A2:H") -> List[List[str]]:
     service = get_google_sheets_service()
     
     # First check settings, then check env var directly
-    spreadsheet_id = settings.google.spreadsheet_id
+    spreadsheet_id = settings.google.spreadsheet_id if settings else None
     if not spreadsheet_id:
         spreadsheet_id = os.getenv("SPREADSHEET_ID", "")
     
@@ -108,7 +160,7 @@ def update_sheet_cell(sheet_name: str, cell: str, value: str):
     service = get_google_sheets_service()
     
     # First check settings, then check env var directly
-    spreadsheet_id = settings.google.spreadsheet_id
+    spreadsheet_id = settings.google.spreadsheet_id if settings else None
     if not spreadsheet_id:
         spreadsheet_id = os.getenv("SPREADSHEET_ID", "")
     
@@ -352,13 +404,20 @@ def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
 def get_transcript_for_video(video_url: str) -> Optional[str]:
     """Get transcript - handles video URLs, text URLs, and plain text"""
     
-    # Check if it's a text file URL
-    if video_url.lower().endswith('.txt') or 'textfile' in video_url.lower():
-        logger.info(f"Detected text file URL, downloading: {video_url}")
-        return download_text_file(video_url)
+    # Clean URL - remove common trailing stuff that might affect detection
+    clean_url = video_url.strip()
+    
+    # Check if it's a text file URL (more robust check)
+    # Check for .txt in URL, or common text file hosting patterns
+    if ('.txt' in clean_url.lower() or 
+        'textfile' in clean_url.lower() or 
+        '/text/' in clean_url or
+        '/raw/' in clean_url and '.txt' in clean_url.lower()):
+        logger.info(f"Detected text file URL, downloading: {clean_url}")
+        return download_text_file(clean_url)
     
     # Check if it's a YouTube URL
-    video_id = get_video_id(video_url)
+    video_id = get_video_id(clean_url)
     
     if video_id:
         # Try YouTube Transcript API first
@@ -368,10 +427,10 @@ def get_transcript_for_video(video_url: str) -> Optional[str]:
             return transcript
     
     # Check if it looks like a URL (has http/https)
-    if video_url.startswith('http://') or video_url.startswith('https://'):
+    if clean_url.startswith('http://') or clean_url.startswith('https://'):
         # Use WhisperX API for video URLs
-        logger.info(f"Using WhisperX API for: {video_url}")
-        return transcribe_with_whisperx_url(video_url)
+        logger.info(f"Using WhisperX API for: {clean_url}")
+        return transcribe_with_whisperx_url(clean_url)
     
     # Otherwise, treat as plain text transcript
     logger.info(f"Using as plain text transcript")
@@ -853,11 +912,13 @@ class WriterCog(commands.Cog):
                     
                     # Upload transcript to R2
                     try:
-                        transcript_file = io.BytesIO(transcript.encode('utf-8'))
                         video_id = get_video_id(link) or "direct"
                         r2_url = await loop.run_in_executor(
                             _executor,
-                            lambda: upload_to_r2(transcript_file, f"transcript_{video_id}.txt")
+                            lambda: upload_to_r2_from_bytesio(
+                                transcript.encode('utf-8'), 
+                                f"transcript_{video_id}.txt"
+                            )
                         )
                         if r2_url:
                             await loop.run_in_executor(
