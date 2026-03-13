@@ -191,7 +191,7 @@ def scrape_article(url: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================================
-# VIDEO TRANSCRIPTION FUNCTIONS (yt-dlp based)
+# VIDEO TRANSCRIPTION FUNCTIONS (WhisperX API based)
 # ============================================================================
 
 def get_video_id(url: str) -> Optional[str]:
@@ -279,7 +279,7 @@ def download_video_audio(url: str, temp_dir: str = "/tmp") -> Optional[str]:
 
 
 def transcribe_with_whisperx_api(audio_path: str) -> Optional[str]:
-    """Transcribe audio using WhisperX API"""
+    """Transcribe audio using WhisperX API (file upload)"""
     WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
     
     try:
@@ -313,33 +313,89 @@ def transcribe_with_whisperx_api(audio_path: str) -> Optional[str]:
         return None
 
 
+def transcribe_with_whisperx_url(video_url: str) -> Optional[str]:
+    """Transcribe video directly from URL using WhisperX API
+    Works with YouTube, Instagram, and any direct video URL"""
+    WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
+    
+    try:
+        # Submit transcription job with URL directly
+        data = {
+            'url': video_url,
+            'model': 'large-v3',
+            'task': 'transcribe'
+        }
+        response = requests.post(
+            f"{WHISPERX_API_URL}/transcribe/url",
+            data=data,
+            timeout=60
+        )
+        
+        if response.ok:
+            result = response.json()
+            job_id = result.get('job_id')
+            if job_id:
+                # Poll for completion
+                max_retries = 60  # 5 minutes max
+                retry_count = 0
+                while retry_count < max_retries:
+                    status_response = requests.get(f"{WHISPERX_API_URL}/jobs/{job_id}", timeout=30)
+                    status_data = status_response.json()
+                    status = status_data.get('status')
+                    
+                    if status == 'completed':
+                        # Get the result - can be direct text or URLs
+                        job_result = status_data.get('result', {})
+                        if isinstance(job_result, dict):
+                            # Check for preview or download the txt
+                            preview = job_result.get('preview', '')
+                            if preview:
+                                return preview
+                            # Try to get text from URLs
+                            urls = job_result.get('urls', {})
+                            if urls.get('txt'):
+                                # Download the txt file
+                                txt_url = urls['txt']
+                                txt_response = requests.get(txt_url, timeout=30)
+                                if txt_response.ok:
+                                    return txt_response.text
+                        return str(job_result)
+                    elif status == 'failed':
+                        error = status_data.get('error', 'Unknown error')
+                        logger.error(f"WhisperX job failed: {error}")
+                        return None
+                    elif status in ['queued', 'downloading', 'processing']:
+                        logger.info(f"WhisperX job status: {status}")
+                        asyncio.sleep(5)
+                        retry_count += 1
+                    else:
+                        logger.warning(f"Unknown WhisperX status: {status}")
+                        return None
+                
+                logger.error(f"WhisperX job timed out after {max_retries} retries")
+                return None
+        else:
+            logger.error(f"WhisperX API error: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"WhisperX URL transcription error: {e}")
+        return None
+
+
 def get_transcript_for_video(video_url: str) -> Optional[str]:
-    """Get transcript - try YouTube API first, then WhisperX"""
+    """Get transcript - try YouTube API first, then WhisperX URL API"""
     video_id = get_video_id(video_url)
     
     if video_id:
-        # Try YouTube Transcript API
+        # Try YouTube Transcript API first
         transcript = get_youtube_transcript(video_id)
         if transcript:
             logger.info(f"Got transcript from YouTube API for {video_id}")
             return transcript
     
-    # Fall back to WhisperX (requires downloading first)
-    logger.info("Trying WhisperX transcription...")
-    audio_path = download_video_audio(video_url)
-    if audio_path:
-        try:
-            transcript = transcribe_with_whisperx_api(audio_path)
-            # Cleanup
-            try:
-                os.remove(audio_path)
-            except:
-                pass
-            return transcript
-        except Exception as e:
-            logger.error(f"WhisperX transcription failed: {e}")
-    
-    return None
+    # Use WhisperX API directly with URL (works for any video URL)
+    logger.info(f"Using WhisperX API for: {video_url}")
+    return transcribe_with_whisperx_url(video_url)
 
 
 # ============================================================================
