@@ -15,6 +15,7 @@ Commands:
 Flow:
 1. Try yt-dlp to get subtitles directly from YouTube
 2. Fall back to WhisperX API if yt-dlp fails
+3. Upload transcripts to R2 for all methods
 """
 
 import discord
@@ -52,6 +53,83 @@ settings = get_settings()
 
 # WhisperX API URL
 WHISPERX_API_URL = os.getenv("WHISPERX_API_URL", "https://whisperx.jeffrey-epstein.com")
+
+
+# ============================================================================
+# R2 UPLOAD FUNCTIONS
+# ============================================================================
+
+def get_r2_client():
+    """Get R2 s3 client using environment variables"""
+    import boto3
+    from botocore.config import Config
+    
+    r2_access_key = os.getenv("R2_ACCESS_KEY_ID")
+    r2_secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    r2_endpoint = os.getenv("R2_ENDPOINT_URL")
+    r2_region = os.getenv("R2_REGION", "auto")
+    
+    if not all([r2_access_key, r2_secret_key, r2_endpoint]):
+        return None
+    
+    return boto3.client(
+        's3',
+        endpoint_url=r2_endpoint,
+        aws_access_key_id=r2_access_key,
+        aws_secret_access_key=r2_secret_key,
+        region_name=r2_region,
+        config=Config(s3={'addressing_style': 'virtual'})
+    )
+
+
+def upload_transcript_to_r2(transcript: str, video_id: str, file_format: str = "txt") -> Optional[str]:
+    """Upload transcript to R2 and return the URL
+    
+    Args:
+        transcript: The transcript text content
+        video_id: Video ID for naming the file
+        file_format: 'txt' or 'srt'
+    
+    Returns:
+        R2 presigned URL or None if failed
+    """
+    import io
+    from botocore.config import Config
+    
+    r2_bucket = os.getenv("R2_BUCKET_NAME")
+    if not r2_bucket:
+        logger.warning("[upload_transcript_to_r2] R2_BUCKET_NAME not set")
+        return None
+    
+    s3 = get_r2_client()
+    if not s3:
+        logger.warning("[upload_transcript_to_r2] Could not get R2 client")
+        return None
+    
+    try:
+        # Create file-like object from transcript string
+        file_obj = io.BytesIO(transcript.encode('utf-8'))
+        
+        # Create object name with timestamp to avoid duplicates
+        timestamp = int(time.time())
+        object_name = f"transcripts/{video_id}_{timestamp}.{file_format}"
+        
+        # Upload
+        s3.upload_fileobj(file_obj, r2_bucket, object_name)
+        
+        # Generate presigned URL
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': r2_bucket, 'Key': object_name},
+            ExpiresIn=86400 * 7  # 7 days
+        )
+        
+        logger.info(f"[upload_transcript_to_r2] Uploaded {file_format} transcript to R2: {object_name}")
+        return url
+        
+    except Exception as e:
+        logger.error(f"[upload_transcript_to_r2] Error uploading to R2: {e}")
+        return None
 
 
 def get_video_id(url: str) -> Optional[str]:
@@ -324,11 +402,14 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
 def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
     Get transcript - tries YouTube Transcript API first, then yt-dlp, then WhisperX.
+    Uploads transcripts to R2 for YouTube API and yt-dlp methods.
     
     Returns: (transcript_text, source, txt_url, srt_url)
-             txt_url and srt_url will be None if not from WhisperX
+             txt_url and srt_url will be R2 URLs if uploaded successfully
     """
     logger.info(f"[_get_transcript] Starting transcript fetch for: {youtube_url}")
+    
+    video_id = get_video_id(youtube_url)
     
     # 1. Try YouTube Transcript API first
     if progress_callback:
@@ -340,7 +421,12 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from YouTube Transcript API!")
-        return transcript, source, None, None  # No URLs for YouTube API
+        
+        # Upload to R2
+        txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
+        logger.info(f"[_get_transcript] YouTube API transcript R2 URL: {txt_url}")
+        
+        return transcript, source, txt_url, None  # Only TXT for YouTube API
     
     # 2. Fall back to yt-dlp if YouTube API failed
     logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
@@ -352,7 +438,12 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         logger.info(f"[_get_transcript] Got transcript from yt-dlp, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from yt-dlp!")
-        return transcript, source, None, None  # No URLs for yt-dlp
+        
+        # Upload to R2
+        txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
+        logger.info(f"[_get_transcript] yt-dlp transcript R2 URL: {txt_url}")
+        
+        return transcript, source, txt_url, None  # Only TXT for yt-dlp
     
     # 3. Fall back to WhisperX API if both failed
     logger.info("[_get_transcript] yt-dlp failed, trying WhisperX API...")
@@ -362,7 +453,7 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     whisper_result = _transcribe_with_whisperx(youtube_url)
     if whisper_result:
         transcript = whisper_result.get("preview", "")
-        # Get the URLs for TXT and SRT transcripts
+        # Get the URLs for TXT and SRT transcripts from WhisperX
         txt_url = None
         srt_url = None
         if whisper_result.get("urls"):
@@ -440,7 +531,7 @@ def _identify_topics_openai(transcript: str, video_title: str = "", video_url: s
     You have been provided with the transcript of a podcast titled "{video_title}". Identify at least {num_topics} major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
     Format the response as a JSON array with the structure:
     [
-        {{"topic": "topic_name"}},
+        {{ "topic": "topic_name" }},
         ...
     ]
     Transcript:
@@ -654,7 +745,7 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url
     You have been provided with the transcript of a podcast titled "{video_title}". Identify at least {num_topics} major topics in the following podcast transcript. Be meticulous in identifying topics, especially provocative, controversial or viral ones. I am especially interested in topics where someone is accused, called out, insulted or defamed.
     Format the response as a JSON array with the structure:
     [
-        {{"topic": "topic_name"}},
+        {{ "topic": "topic_name" }},
         ...
     ]
     Transcript:
@@ -914,7 +1005,7 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Transcription failed. Please try again later.")
                 return
             
-            # Send transcript URLs if available (WhisperX provides these)
+            # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
                 if txt_url:
@@ -1048,7 +1139,7 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            # Send transcript URLs if available (WhisperX provides these)
+            # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
                 if txt_url:
@@ -1158,7 +1249,7 @@ class SummarizationCog(commands.Cog):
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
             
-            # Send transcript URLs if available (WhisperX provides these)
+            # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
                 if txt_url:
