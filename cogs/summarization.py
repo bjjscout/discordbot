@@ -30,6 +30,7 @@ import re
 import time
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.formatters import SRTFormatter
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
@@ -211,11 +212,11 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
     """
     Fetch transcript using YouTube Transcript API.
     
-    Returns: (transcript_text, source)
+    Returns: (transcript_text, source, srt_transcript)
     """
     video_id = get_video_id(youtube_url)
     if not video_id:
-        return None, "YouTube API failed"
+        return None, "YouTube API failed", None
     
     # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
@@ -238,27 +239,31 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
         # Convert to plain text
         transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
         
-        return transcript_text, "YouTube API"
+        # Convert to SRT format using SRTFormatter
+        formatter = SRTFormatter()
+        srt_transcript = formatter.format_transcript(fetched_transcript)
+        
+        return transcript_text, "YouTube API", srt_transcript
         
     except Exception as e:
         error_msg = str(e)
         # Check if it's an IP block - if so, skip other YouTube methods too
         if "cloud provider" in error_msg.lower() or "ip" in error_msg.lower() or "blocked" in error_msg.lower():
             logger.warning(f"YouTube API blocked (IP issue): {e}", youtube_url=youtube_url)
-            return None, "YouTube API blocked"
+            return None, "YouTube API blocked", None
         logger.error(f"YouTube Transcript API error: {e}", youtube_url=youtube_url)
-        return None, "YouTube API failed"
+        return None, "YouTube API failed", None
 
 
 def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
     """
     Fetch transcript using yt-dlp - gets subtitles directly from YouTube.
     
-    Returns: (transcript_text, source)
+    Returns: (transcript_text, source, srt_transcript)
     """
     video_id = get_video_id(youtube_url)
     if not video_id:
-        return None, "yt-dlp failed"
+        return None, "yt-dlp failed", None
     
     # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
@@ -317,6 +322,9 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
                     # Clean up extra whitespace
                     text = re.sub(r'\n\n+', '\n', text).strip()
                     
+                    # Convert VTT to SRT format
+                    srt_transcript = _convert_vtt_to_srt(vtt_content)
+                    
                     # Clean up temp files
                     try:
                         os.remove(vtt_path)
@@ -324,13 +332,70 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
                         pass
                     
                     if text:
-                        return text, "yt-dlp"
+                        return text, "yt-dlp", srt_transcript
         
-        return None, "yt-dlp no subtitles"
+        return None, "yt-dlp no subtitles", None
         
     except Exception as e:
         logger.error(f"yt-dlp transcript fetch error: {e}", youtube_url=youtube_url)
-        return None, "yt-dlp failed"
+        return None, "yt-dlp failed", None
+
+
+def _convert_vtt_to_srt(vtt_content: str) -> str:
+    """
+    Convert VTT subtitle content to SRT format.
+    """
+    lines = vtt_content.strip().split('\n')
+    srt_lines = []
+    cue_counter = 1
+    i = 0
+    
+    # Skip header if present
+    if lines and lines[0].strip() == 'WEBVTT':
+        i = 1
+        while i < len(lines) and lines[i].strip():
+            i += 1
+    
+    # Parse cues
+    current_cue_lines = []
+    timestamp_pattern = r'(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})'
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        if re.match(timestamp_pattern, line):
+            if current_cue_lines:
+                srt_lines.append(str(cue_counter))
+                timestamp_match = re.search(timestamp_pattern, current_cue_lines[0])
+                if timestamp_match:
+                    start_ts = timestamp_match.group(1).replace('.', ',')
+                    end_ts = timestamp_match.group(2).replace('.', ',')
+                    srt_lines.append(f"{start_ts} --> {end_ts}")
+                    for text_line in current_cue_lines[1:]:
+                        srt_lines.append(text_line)
+                    srt_lines.append('')
+                    cue_counter += 1
+                current_cue_lines = []
+            
+            current_cue_lines.append(line)
+        elif line:
+            current_cue_lines.append(line)
+        
+        i += 1
+    
+    # Handle last cue
+    if current_cue_lines:
+        srt_lines.append(str(cue_counter))
+        timestamp_match = re.search(timestamp_pattern, current_cue_lines[0])
+        if timestamp_match:
+            start_ts = timestamp_match.group(1).replace('.', ',')
+            end_ts = timestamp_match.group(2).replace('.', ',')
+            srt_lines.append(f"{start_ts} --> {end_ts}")
+            for text_line in current_cue_lines[1:]:
+                srt_lines.append(text_line)
+        srt_lines.append('')
+    
+    return '\n'.join(srt_lines)
 
 
 def _submit_transcription_job(video_url: str) -> Optional[str]:
@@ -402,7 +467,7 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
 def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
     Get transcript - tries YouTube Transcript API first, then yt-dlp, then WhisperX.
-    Uploads transcripts to R2 for YouTube API and yt-dlp methods.
+    Uploads both TXT and SRT to R2 for all methods.
     
     Returns: (transcript_text, source, txt_url, srt_url)
              txt_url and srt_url will be R2 URLs if uploaded successfully
@@ -416,34 +481,44 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         progress_callback("Trying to get transcript with YouTube Transcript API...")
     
     logger.info("[_get_transcript] Attempting YouTube Transcript API...")
-    transcript, source = _fetch_transcript_youtube_api(youtube_url)
+    transcript, source, srt_transcript = _fetch_transcript_youtube_api(youtube_url)
     if transcript:
         logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from YouTube Transcript API!")
         
-        # Upload to R2
+        # Upload both TXT and SRT to R2
         txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
-        logger.info(f"[_get_transcript] YouTube API transcript R2 URL: {txt_url}")
+        logger.info(f"[_get_transcript] YouTube API TXT R2 URL: {txt_url}")
         
-        return transcript, source, txt_url, None  # Only TXT for YouTube API
+        srt_url = None
+        if srt_transcript:
+            srt_url = upload_transcript_to_r2(srt_transcript, video_id, "srt")
+            logger.info(f"[_get_transcript] YouTube API SRT R2 URL: {srt_url}")
+        
+        return transcript, source, txt_url, srt_url
     
     # 2. Fall back to yt-dlp if YouTube API failed
     logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
     if progress_callback:
         progress_callback("YouTube Transcript API failed. Trying yt-dlp...")
     
-    transcript, source = _fetch_transcript_ytdlp(youtube_url)
+    transcript, source, srt_transcript = _fetch_transcript_ytdlp(youtube_url)
     if transcript:
         logger.info(f"[_get_transcript] Got transcript from yt-dlp, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from yt-dlp!")
         
-        # Upload to R2
+        # Upload both TXT and SRT to R2
         txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
-        logger.info(f"[_get_transcript] yt-dlp transcript R2 URL: {txt_url}")
+        logger.info(f"[_get_transcript] yt-dlp TXT R2 URL: {txt_url}")
         
-        return transcript, source, txt_url, None  # Only TXT for yt-dlp
+        srt_url = None
+        if srt_transcript:
+            srt_url = upload_transcript_to_r2(srt_transcript, video_id, "srt")
+            logger.info(f"[_get_transcript] yt-dlp SRT R2 URL: {srt_url}")
+        
+        return transcript, source, txt_url, srt_url
     
     # 3. Fall back to WhisperX API if both failed
     logger.info("[_get_transcript] yt-dlp failed, trying WhisperX API...")
