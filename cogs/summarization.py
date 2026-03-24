@@ -325,7 +325,8 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     """
     Get transcript - tries YouTube Transcript API first, then yt-dlp, then WhisperX.
     
-    Returns: (transcript_text, source)
+    Returns: (transcript_text, source, txt_url, srt_url)
+             txt_url and srt_url will be None if not from WhisperX
     """
     logger.info(f"[_get_transcript] Starting transcript fetch for: {youtube_url}")
     
@@ -339,7 +340,7 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from YouTube Transcript API!")
-        return transcript, source
+        return transcript, source, None, None  # No URLs for YouTube API
     
     # 2. Fall back to yt-dlp if YouTube API failed
     logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
@@ -351,7 +352,7 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         logger.info(f"[_get_transcript] Got transcript from yt-dlp, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from yt-dlp!")
-        return transcript, source
+        return transcript, source, None, None  # No URLs for yt-dlp
     
     # 3. Fall back to WhisperX API if both failed
     logger.info("[_get_transcript] yt-dlp failed, trying WhisperX API...")
@@ -361,13 +362,20 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
     whisper_result = _transcribe_with_whisperx(youtube_url)
     if whisper_result:
         transcript = whisper_result.get("preview", "")
+        # Get the URLs for TXT and SRT transcripts
+        txt_url = None
+        srt_url = None
+        if whisper_result.get("urls"):
+            txt_url = whisper_result["urls"].get("txt")
+            srt_url = whisper_result["urls"].get("srt")
         logger.info(f"[_get_transcript] Got transcript from WhisperX, length: {len(transcript)} chars")
+        logger.info(f"[_get_transcript] TXT URL: {txt_url}, SRT URL: {srt_url}")
         if progress_callback:
             progress_callback("Got transcript from WhisperX!")
-        return transcript, "WhisperX"
+        return transcript, "WhisperX", txt_url, srt_url
     
     logger.error("[_get_transcript] All transcript methods failed")
-    return None, "Failed"
+    return None, "Failed", None, None
 
 
 def _summarize_with_openai(transcript: str, video_title: str = "") -> Optional[str]:
@@ -894,10 +902,10 @@ class SummarizationCog(commands.Cog):
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try YouTube API first, then yt-dlp, then WhisperX
-            transcript, source = None, "Failed"
+            transcript, source, txt_url, srt_url = None, "Failed", None, None
             
             # Try all transcript methods in order
-            transcript, source = await loop.run_in_executor(
+            transcript, source, txt_url, srt_url = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
             )
@@ -905,6 +913,15 @@ class SummarizationCog(commands.Cog):
             if not transcript:
                 await ctx.send("❌ Transcription failed. Please try again later.")
                 return
+            
+            # Send transcript URLs if available (WhisperX provides these)
+            if txt_url or srt_url:
+                urls_msg = "📄 **Transcript URLs:**\n"
+                if txt_url:
+                    urls_msg += f"• TXT: {txt_url}\n"
+                if srt_url:
+                    urls_msg += f"• SRT: {srt_url}\n"
+                await ctx.send(urls_msg)
             
             # Check if using wrapper or direct API
             wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
@@ -1022,7 +1039,7 @@ class SummarizationCog(commands.Cog):
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
-            transcript, source = await loop.run_in_executor(
+            transcript, source, txt_url, srt_url = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
             )
@@ -1030,6 +1047,15 @@ class SummarizationCog(commands.Cog):
             if not transcript:
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
+            
+            # Send transcript URLs if available (WhisperX provides these)
+            if txt_url or srt_url:
+                urls_msg = "📄 **Transcript URLs:**\n"
+                if txt_url:
+                    urls_msg += f"• TXT: {txt_url}\n"
+                if srt_url:
+                    urls_msg += f"• SRT: {srt_url}\n"
+                await ctx.send(urls_msg)
             
             logger.info("[sum] Identifying topics with OpenAI...")
             await ctx.send(f"📝 Transcript source: {source}\n🤖 Identifying topics with OpenAI (step 1/2)...")
@@ -1123,7 +1149,7 @@ class SummarizationCog(commands.Cog):
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
             
             # Try all transcript methods in order
-            transcript, source = await loop.run_in_executor(
+            transcript, source, txt_url, srt_url = await loop.run_in_executor(
                 _executor,
                 lambda: _get_transcript(youtube_url)
             )
@@ -1131,6 +1157,15 @@ class SummarizationCog(commands.Cog):
             if not transcript:
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
+            
+            # Send transcript URLs if available (WhisperX provides these)
+            if txt_url or srt_url:
+                urls_msg = "📄 **Transcript URLs:**\n"
+                if txt_url:
+                    urls_msg += f"• TXT: {txt_url}\n"
+                if srt_url:
+                    urls_msg += f"• SRT: {srt_url}\n"
+                await ctx.send(urls_msg)
             
             # Check if using wrapper or direct API
             wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
