@@ -1064,20 +1064,26 @@ class SummarizationCog(commands.Cog):
                 logger.warning("[sumw] Could not detect video duration")
                 await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             
-            logger.info("[sumw] Fetching transcript...")
-            await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
+            logger.info("[sumw] Fetching transcript with WhisperX...")
+            await ctx.send("📝 Getting transcript with WhisperX...")
             
-            # Try YouTube API first, then yt-dlp, then WhisperX
+            # Use WhisperX directly for !sumw command
             transcript, source, txt_url, srt_url = None, "Failed", None, None
             
-            # Try all transcript methods in order
-            transcript, source, txt_url, srt_url = await loop.run_in_executor(
+            whisper_result = await loop.run_in_executor(
                 _executor,
-                lambda: _get_transcript(youtube_url)
+                lambda: _transcribe_with_whisperx(youtube_url)
             )
             
-            if not transcript:
-                await ctx.send("❌ Transcription failed. Please try again later.")
+            if whisper_result:
+                transcript = whisper_result.get("preview", "")
+                if whisper_result.get("urls"):
+                    txt_url = whisper_result["urls"].get("txt")
+                    srt_url = whisper_result["urls"].get("srt")
+                source = "WhisperX"
+                logger.info(f"[sumw] Got transcript from WhisperX, length: {len(transcript)} chars")
+            else:
+                await ctx.send("❌ WhisperX transcription failed. Please try again later.")
                 return
             
             # Send transcript URLs if available
