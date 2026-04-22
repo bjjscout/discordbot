@@ -129,6 +129,56 @@ class ContextFilter(logging.Filter):
         return True
 
 
+class LoggerWrapper:
+    """
+    Wraps a standard logger to provide structured logging support.
+    This allows calling logger.info("msg", key=value) syntax.
+    """
+
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+
+    def _log(self, level: int, msg: str, exc_info=None, stack_info=None, **kwargs):
+        if kwargs:
+            record = self._logger.makeRecord(
+                self._logger.name,
+                level,
+                "",
+                0,
+                msg,
+                (),
+                exc_info,
+                stack_info=stack_info,
+            )
+            record.extra = kwargs
+            self._logger.handle(record)
+        else:
+            self._logger.log(level, msg, exc_info=exc_info, stack_info=stack_info)
+
+    def debug(self, msg: str, exc_info=None, stack_info=None, **kwargs):
+        self._log(
+            logging.DEBUG, msg, exc_info=exc_info, stack_info=stack_info, **kwargs
+        )
+
+    def info(self, msg: str, exc_info=None, stack_info=None, **kwargs):
+        self._log(logging.INFO, msg, exc_info=exc_info, stack_info=stack_info, **kwargs)
+
+    def warning(self, msg: str, exc_info=None, stack_info=None, **kwargs):
+        self._log(
+            logging.WARNING, msg, exc_info=exc_info, stack_info=stack_info, **kwargs
+        )
+
+    def error(self, msg: str, exc_info=None, stack_info=None, **kwargs):
+        self._log(
+            logging.ERROR, msg, exc_info=exc_info, stack_info=stack_info, **kwargs
+        )
+
+    def critical(self, msg: str, exc_info=None, stack_info=None, **kwargs):
+        self._log(
+            logging.CRITICAL, msg, exc_info=exc_info, stack_info=stack_info, **kwargs
+        )
+
+
 @lru_cache(maxsize=1)
 def get_logger(name: str) -> LoggerWrapper:
     """
