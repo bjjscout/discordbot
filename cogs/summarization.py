@@ -577,7 +577,8 @@ def _summarize_with_openai(transcript: str, video_title: str = "") -> Optional[s
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
 Provide a concise but comprehensive summary of the key points covered in the video.
 Focus on the main topics, important details, and conclusions.
-Format the summary in a clear, readable way with bullet points or sections."""
+Format the summary in a clear, readable way with bullet points or sections.
+IMPORTANT: Provide your entire response in English, even if the transcript is in another language."""
 
     user_prompt = f"""Please summarize the following transcript from the video "{video_title}":
 
@@ -632,11 +633,12 @@ def _identify_topics_openai(transcript: str, video_title: str = "", video_url: s
         {{ "topic": "topic_name" }},
         ...
     ]
+    IMPORTANT: Provide all topic names and your response in English, even if the transcript is in another language.
     Transcript:
     {transcript}
     """
     
-    system_message = "You are a helpful assistant that identifies topics in podcast transcripts."
+    system_message = "You are a helpful assistant that identifies topics in podcast transcripts. Provide all output in English."
     
     try:
         response = requests.post(
@@ -713,7 +715,7 @@ def _summarize_all_topics_openai(topics: list, transcript: str, video_title: str
     {transcript}
     """
     
-    system_message = "You are a helpful assistant that summarizes podcast topics from transcripts."
+    system_message = "You are a helpful assistant that summarizes podcast topics from transcripts. Provide all output in English, even if the transcript is in another language."
     
     try:
         response = requests.post(
@@ -755,7 +757,8 @@ def _summarize_with_anthropic(transcript: str, video_title: str = "") -> tuple:
     system_prompt = """You are a helpful AI assistant that summarizes YouTube video transcripts.
 Provide a concise but comprehensive summary of the key points covered in the video.
 Focus on the main topics, important details, and conclusions.
-Format the summary in a clear, readable way with bullet points or sections."""
+Format the summary in a clear, readable way with bullet points or sections.
+IMPORTANT: Provide your entire response in English, even if the transcript is in another language."""
 
     user_prompt = f"""Please summarize the following transcript from the video "{video_title}":
 
@@ -846,11 +849,12 @@ def _identify_topics_anthropic(transcript: str, video_title: str = "", video_url
         {{ "topic": "topic_name" }},
         ...
     ]
+    IMPORTANT: Provide all topic names and your response in English, even if the transcript is in another language.
     Transcript:
     {transcript}
     """
     
-    system_message = "You are a helpful assistant that identifies topics in podcast transcripts."
+    system_message = "You are a helpful assistant that identifies topics in podcast transcripts. Provide all output in English."
     
     # Try wrapper API first (if password is set)
     if wrapper_key:
@@ -966,7 +970,7 @@ def _summarize_all_topics_anthropic(topics: list, transcript: str, video_title: 
     {transcript}
     """
     
-    system_message = "You are a helpful assistant that summarizes podcast topics from transcripts."
+    system_message = "You are a helpful assistant that summarizes podcast topics from transcripts. Provide all output in English, even if the transcript is in another language."
     
     # Try wrapper API first (if password is set)
     if wrapper_key:
