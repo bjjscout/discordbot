@@ -166,27 +166,58 @@ async def get_video_title(url: str) -> str:
     return f"Video {video_id}"
 
 
+def _get_proxy_with_modified_port(proxy_url: str = "") -> str:
+    """Generate a proxy URL with modified last 2 digits of port for retry"""
+    import random
+    import re
+    
+    if not proxy_url:
+        return proxy_url
+    
+    try:
+        match = re.match(r'(socks5?://[^@]+@[^:]+:)(\d+)', proxy_url)
+        if match:
+            base = match.group(1)
+            old_port = match.group(2)
+            new_last_digits = str(random.randint(10, 99))
+            new_port = old_port[:-2] + new_last_digits
+            new_proxy = f"{base}{new_port}"
+            logger.info(f"[_get_proxy_with_modified_port] Original port: {old_port}, new port: {new_port}")
+            return new_proxy
+    except Exception as e:
+        logger.warning(f"[_get_proxy_with_modified_port] Error modifying proxy port: {e}")
+    
+    return proxy_url
+
+
 def get_video_duration(url: str) -> Optional[int]:
     """Get video duration in seconds using yt-dlp (no download required)"""
     try:
         video_id = get_video_id(url)
         if not video_id:
             return None  # Not a YouTube URL
-        
-        # Get proxy from environment - set YOUTUBE_PROXY in Coolify
-        # Format: socks5://username:password@host:port
+
         proxy_url = os.getenv("YOUTUBE_PROXY", "")
-        
-        ydl_opts = {'quiet': True, 'no_warnings': True}
-        
-        # Add proxy if configured
-        if proxy_url:
-            ydl_opts['proxy'] = proxy_url
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-            duration = info.get('duration')  # Duration in seconds
+
+        def _try_duration(proxy: str) -> Optional[int]:
+            ydl_opts = {'quiet': True, 'no_warnings': True}
+            if proxy:
+                ydl_opts['proxy'] = proxy
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                return info.get('duration')
+
+        duration = _try_duration(proxy_url)
+        if duration is not None:
             return duration
+
+        if proxy_url:
+            new_proxy = _get_proxy_with_modified_port(proxy_url)
+            logger.info(f"Duration fetch failed with original proxy, trying modified port", video_url=url)
+            duration = _try_duration(new_proxy)
+            if duration is not None:
+                return duration
+
     except Exception as e:
         logger.error(f"Error fetching video duration: {e}", video_url=url)
         return None
@@ -220,56 +251,70 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
 
     proxy_url = os.getenv("YOUTUBE_PROXY", "")
 
-    try:
-        if proxy_url:
+    def _try_fetch(proxy: str) -> tuple:
+        if proxy:
             from youtube_transcript_api.proxies import GenericProxyConfig
             ytt_api = YouTubeTranscriptApi(
                 proxy_config=GenericProxyConfig(
-                    http_url=proxy_url,
-                    https_url=proxy_url,
+                    http_url=proxy,
+                    https_url=proxy,
                 )
             )
         else:
             ytt_api = YouTubeTranscriptApi()
+        return ytt_api.fetch(video_id)
 
-        fetched_transcript = ytt_api.fetch(video_id)
+    def _is_proxy_error(e: Exception) -> bool:
+        error_msg = str(e).lower()
+        proxy_indicators = ['proxy', 'socks', 'timeout', 'unreachable', 'connection', 'host', 'socket']
+        return any(indicator in error_msg for indicator in proxy_indicators)
 
+    try:
+        fetched_transcript = _try_fetch(proxy_url)
         transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
-
         formatter = SRTFormatter()
         srt_transcript = formatter.format_transcript(fetched_transcript)
-
         return transcript_text, "YouTube API", srt_transcript
 
     except Exception as e:
         error_msg = str(e)
 
         if "not be retrieved" in error_msg.lower() and ("language" in error_msg.lower() or "transcript" in error_msg.lower()):
-            logger.warning(f"YouTube API: requested language unavailable, trying to fetch any available: {e}", youtube_url=youtube_url)
+            logger.warning(f"YouTube API: requested language unavailable, trying alt languages: {e}", youtube_url=youtube_url)
             try:
-                if proxy_url:
-                    from youtube_transcript_api.proxies import GenericProxyConfig
-                    ytt_api = YouTubeTranscriptApi(
-                        proxy_config=GenericProxyConfig(
-                            http_url=proxy_url,
-                            https_url=proxy_url,
-                        )
-                    )
-                else:
-                    ytt_api = YouTubeTranscriptApi()
-
-                fetched_transcript = ytt_api.fetch(video_id, languages=['pt', 'pt-BR', 'es', 'es-ES'])
-
+                fetched_transcript = _try_fetch(proxy_url)
                 transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
-
                 formatter = SRTFormatter()
                 srt_transcript = formatter.format_transcript(fetched_transcript)
-
-                logger.info(f"YouTube API: got transcript in alternative language, will need translation", youtube_url=youtube_url)
+                logger.info("YouTube API: got transcript in alternative language", youtube_url=youtube_url)
                 return transcript_text, "YouTube API (needs translation)", srt_transcript
-
             except Exception as e2:
-                logger.error(f"YouTube API alternative language fetch error: {e2}", youtube_url=youtube_url)
+                if proxy_url and _is_proxy_error(e2):
+                    logger.warning(f"YouTube API alt fetch failed with proxy, retrying with modified port: {e2}", youtube_url=youtube_url)
+                    new_proxy = _get_proxy_with_modified_port(proxy_url)
+                    try:
+                        fetched_transcript = _try_fetch(new_proxy)
+                        transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
+                        formatter = SRTFormatter()
+                        srt_transcript = formatter.format_transcript(fetched_transcript)
+                        logger.info("YouTube API: got transcript with modified proxy", youtube_url=youtube_url)
+                        return transcript_text, "YouTube API (needs translation)", srt_transcript
+                    except Exception as e3:
+                        logger.error(f"YouTube API alt fetch with modified proxy failed: {e3}", youtube_url=youtube_url)
+                else:
+                    logger.error(f"YouTube API alternative language fetch error: {e2}", youtube_url=youtube_url)
+
+        if _is_proxy_error(e) and proxy_url:
+            logger.warning(f"YouTube API failed with proxy, retrying with modified port: {e}", youtube_url=youtube_url)
+            new_proxy = _get_proxy_with_modified_port(proxy_url)
+            try:
+                fetched_transcript = _try_fetch(new_proxy)
+                transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
+                formatter = SRTFormatter()
+                srt_transcript = formatter.format_transcript(fetched_transcript)
+                return transcript_text, "YouTube API", srt_transcript
+            except Exception as e2:
+                logger.error(f"YouTube API retry with modified proxy failed: {e2}", youtube_url=youtube_url)
 
         if "cloud provider" in error_msg.lower() or "ip" in error_msg.lower() or "blocked" in error_msg.lower():
             logger.warning(f"YouTube API blocked (IP issue): {e}", youtube_url=youtube_url)
@@ -291,77 +336,84 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
     # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
     proxy_url = os.getenv("YOUTUBE_PROXY", "")
-    
-    ydl_opts = {
-        'writesubtitles': True,
-        'writeautomaticsub': True,
-        'subtitlesformat': 'vtt',
-        'skip_download': True,
-        'outtmpl': f'/tmp/{video_id}.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-        'socket_timeout': 30,
-    }
-    
-    # Only add proxy if configured
-    if proxy_url:
-        ydl_opts['proxy'] = proxy_url
-    
-    try:
+
+    def _is_proxy_error(e: Exception) -> bool:
+        error_msg = str(e).lower()
+        proxy_indicators = ['proxy', 'socks', 'timeout', 'unreachable', 'connection', 'host', 'socket', '429', 'rate']
+        return any(indicator in error_msg for indicator in proxy_indicators)
+
+    def _try_ytdlp(proxy: str) -> tuple:
+        ydl_opts = {
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitlesformat': 'vtt',
+            'skip_download': True,
+            'outtmpl': f'/tmp/{video_id}.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'socket_timeout': 30,
+        }
+        if proxy:
+            ydl_opts['proxy'] = proxy
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Extract info first to see available subtitles
             info = ydl.extract_info(youtube_url, download=False)
-            
             subtitles = info.get('subtitles') or info.get('automatic_captions')
-            
+
             if subtitles:
-                # Download subtitles
                 ydl.download([youtube_url])
-                
-                # Try to find English subtitles
                 lang_order = ['en', 'en-US', 'en-GB', 'a.en']
                 subtitle_lang = None
-                
+
                 for lang in lang_order:
                     if lang in subtitles:
                         subtitle_lang = lang
                         break
-                
+
                 if not subtitle_lang:
-                    # Just pick the first available
                     subtitle_lang = list(subtitles.keys())[0]
-                
-                # Read the downloaded subtitle file
+
                 vtt_path = f'/tmp/{video_id}.{subtitle_lang}.vtt'
                 if os.path.exists(vtt_path):
                     with open(vtt_path, 'r', encoding='utf-8') as f:
                         vtt_content = f.read()
-                    
-                    # Convert VTT to plain text (strip tags)
-                    # Remove VTT formatting tags
+
                     text = re.sub(r'<[^>]+>', '', vtt_content)
-                    # Remove timestamp lines
                     text = re.sub(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}', '', text)
-                    # Clean up extra whitespace
                     text = re.sub(r'\n\n+', '\n', text).strip()
-                    
-                    # Convert VTT to SRT format
+
                     srt_transcript = _convert_vtt_to_srt(vtt_content)
-                    
-                    # Clean up temp files
+
                     try:
                         os.remove(vtt_path)
                     except:
                         pass
-                    
+
                     if text:
                         return text, "yt-dlp", srt_transcript
-        
+
         return None, "yt-dlp no subtitles", None
-        
+
+    try:
+        result = _try_ytdlp(proxy_url)
+        if result[0]:
+            return result
     except Exception as e:
-        logger.error(f"yt-dlp transcript fetch error: {e}", youtube_url=youtube_url)
-        return None, "yt-dlp failed", None
+        if proxy_url and _is_proxy_error(e):
+            logger.warning(f"yt-dlp failed with proxy, retrying with modified port: {e}", youtube_url=youtube_url)
+            new_proxy = _get_proxy_with_modified_port(proxy_url)
+            try:
+                result = _try_ytdlp(new_proxy)
+                if result[0]:
+                    logger.info("yt-dlp succeeded with modified proxy", youtube_url=youtube_url)
+                    return result
+            except Exception as e2:
+                logger.error(f"yt-dlp retry with modified proxy failed: {e2}", youtube_url=youtube_url)
+        else:
+            logger.error(f"yt-dlp transcript fetch error: {e}", youtube_url=youtube_url)
+            return None, "yt-dlp failed", None
+
+    return None, "yt-dlp no subtitles", None
 
 
 def _convert_vtt_to_srt(vtt_content: str) -> str:
