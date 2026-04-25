@@ -211,17 +211,15 @@ def get_num_topics(url: str) -> str:
 def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
     """
     Fetch transcript using YouTube Transcript API.
-    
+
     Returns: (transcript_text, source, srt_transcript)
     """
     video_id = get_video_id(youtube_url)
     if not video_id:
         return None, "YouTube API failed", None
-    
-    # Get proxy from environment - set YOUTUBE_PROXY in Coolify
-    # Format: socks5://username:password@host:port
+
     proxy_url = os.getenv("YOUTUBE_PROXY", "")
-    
+
     try:
         if proxy_url:
             from youtube_transcript_api.proxies import GenericProxyConfig
@@ -233,21 +231,46 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
             )
         else:
             ytt_api = YouTubeTranscriptApi()
-            
+
         fetched_transcript = ytt_api.fetch(video_id)
-        
-        # Convert to plain text
+
         transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
-        
-        # Convert to SRT format using SRTFormatter
+
         formatter = SRTFormatter()
         srt_transcript = formatter.format_transcript(fetched_transcript)
-        
+
         return transcript_text, "YouTube API", srt_transcript
-        
+
     except Exception as e:
         error_msg = str(e)
-        # Check if it's an IP block - if so, skip other YouTube methods too
+
+        if "not be retrieved" in error_msg.lower() and ("language" in error_msg.lower() or "transcript" in error_msg.lower()):
+            logger.warning(f"YouTube API: requested language unavailable, trying to fetch any available: {e}", youtube_url=youtube_url)
+            try:
+                if proxy_url:
+                    from youtube_transcript_api.proxies import GenericProxyConfig
+                    ytt_api = YouTubeTranscriptApi(
+                        proxy_config=GenericProxyConfig(
+                            http_url=proxy_url,
+                            https_url=proxy_url,
+                        )
+                    )
+                else:
+                    ytt_api = YouTubeTranscriptApi()
+
+                fetched_transcript = ytt_api.fetch(video_id, languages=['pt', 'pt-BR', 'es', 'es-ES'])
+
+                transcript_text = ' '.join([snippet.text for snippet in fetched_transcript])
+
+                formatter = SRTFormatter()
+                srt_transcript = formatter.format_transcript(fetched_transcript)
+
+                logger.info(f"YouTube API: got transcript in alternative language, will need translation", youtube_url=youtube_url)
+                return transcript_text, "YouTube API (needs translation)", srt_transcript
+
+            except Exception as e2:
+                logger.error(f"YouTube API alternative language fetch error: {e2}", youtube_url=youtube_url)
+
         if "cloud provider" in error_msg.lower() or "ip" in error_msg.lower() or "blocked" in error_msg.lower():
             logger.warning(f"YouTube API blocked (IP issue): {e}", youtube_url=youtube_url)
             return None, "YouTube API blocked", None
