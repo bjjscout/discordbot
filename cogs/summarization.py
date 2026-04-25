@@ -316,7 +316,8 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
             except Exception as e2:
                 logger.error(f"YouTube API retry with modified proxy failed: {e2}", youtube_url=youtube_url)
 
-        if "cloud provider" in error_msg.lower() or "ip" in error_msg.lower() or "blocked" in error_msg.lower():
+        if ("cloud provider" in error_msg.lower() or "ip address blocked" in error_msg.lower() or 
+            ("ip" in error_msg.lower() and "blocked" in error_msg.lower())):
             logger.warning(f"YouTube API blocked (IP issue): {e}", youtube_url=youtube_url)
             return None, "YouTube API blocked", None
         logger.error(f"YouTube Transcript API error: {e}", youtube_url=youtube_url)
