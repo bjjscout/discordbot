@@ -1270,57 +1270,58 @@ class SummarizationCog(commands.Cog):
     @commands.command(
         name='sumw',
         help='Summarize using WhisperX, then Claude',
-        description='Transcribe with WhisperX, then summarize with Claude',
-        usage='!sumw <youtube_url>',
-        brief='!sumw <youtube_url>'
+        description='Transcribe with WhisperX, then summarize with Claude. Works with YouTube, Instagram, Twitter/X, TikTok, and other platforms supported by yt-dlp.',
+        usage='!sumw <video_url>',
+        brief='!sumw <video_url>'
     )
-    async def sumw_command(self, ctx, youtube_url: str):
+    async def sumw_command(self, ctx, url: str):
         """!sumw - Uses WhisperX first, then Claude"""
-        logger.info(f"[sumw] Command invoked with URL: {youtube_url}")
-        
+        logger.info(f"[sumw] Command invoked with URL: {url}")
+
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
-        
-        await ctx.send(f"📝 Processing: {youtube_url}")
-        
+
+        is_youtube = is_youtube_url(url)
+        video_id = get_video_id(url) if is_youtube else None
+
+        await ctx.send(f"📝 Processing: {url}")
+
         loop = asyncio.get_event_loop()
-        video_id = get_video_id(youtube_url)
-        
-        if not video_id:
-            await ctx.send("❌ Invalid YouTube URL")
-            return
-        
+
         try:
-            video_title = await get_video_title(youtube_url)
+            video_title = await get_video_title(url) if is_youtube else "Unknown Video"
             logger.info(f"[sumw] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
-            
-            # Get video duration and show topic count
-            logger.info("[sumw] Checking video duration...")
-            await ctx.send("⏳ Checking video duration for topic count...")
-            duration = get_video_duration(youtube_url)
-            if duration:
-                duration_mins = duration // 60
-                duration_secs = duration % 60
-                num_topics = get_num_topics(youtube_url)
-                logger.info(f"[sumw] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
-                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+
+            # Get video duration and show topic count (YouTube only)
+            if is_youtube:
+                logger.info("[sumw] Checking video duration...")
+                await ctx.send("⏳ Checking video duration for topic count...")
+                duration = get_video_duration(url)
+                if duration:
+                    duration_mins = duration // 60
+                    duration_secs = duration % 60
+                    num_topics = get_num_topics(url)
+                    logger.info(f"[sumw] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
+                    await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+                else:
+                    logger.warning("[sumw] Could not detect video duration")
+                    await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             else:
-                logger.warning("[sumw] Could not detect video duration")
-                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
-            
+                await ctx.send("⏱️ Non-YouTube URL detected, using default topic count (10 to 15)")
+
             logger.info("[sumw] Fetching transcript with WhisperX...")
             await ctx.send("📝 Getting transcript with WhisperX...")
-            
+
             # Use WhisperX directly for !sumw command
             transcript, source, txt_url, srt_url = None, "Failed", None, None
-            
+
             whisper_result = await loop.run_in_executor(
                 _executor,
-                lambda: _transcribe_with_whisperx(youtube_url)
+                lambda: _transcribe_with_whisperx(url)
             )
-            
+
             if whisper_result:
                 transcript = whisper_result.get("preview", "")
                 if whisper_result.get("urls"):
@@ -1331,7 +1332,7 @@ class SummarizationCog(commands.Cog):
             else:
                 await ctx.send("❌ WhisperX transcription failed. Please try again later.")
                 return
-            
+
             # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
@@ -1350,11 +1351,11 @@ class SummarizationCog(commands.Cog):
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
-            # Stage 1: Identify topics (pass youtube_url for duration-based topic count)
+            # Stage 1: Identify topics
             logger.info("[sumw] Identifying topics with Claude...")
             topics_result = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_anthropic(transcript, video_title, youtube_url)
+                lambda: _identify_topics_anthropic(transcript, video_title, url)
             )
             topics, topics_fallback = topics_result if topics_result else (None, False)
             
@@ -1408,50 +1409,51 @@ class SummarizationCog(commands.Cog):
     @commands.command(
         name='sum',
         help='Summarize using yt-dlp/WhisperX, then OpenAI',
-        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with OpenAI',
-        usage='!sum <youtube_url>',
-        brief='!sum <youtube_url>'
+        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with OpenAI. Works with YouTube, Instagram, Twitter/X, TikTok, and other platforms supported by yt-dlp.',
+        usage='!sum <video_url>',
+        brief='!sum <video_url>'
     )
-    async def sum_command(self, ctx, youtube_url: str):
+    async def sum_command(self, ctx, url: str):
         """!sum - Use yt-dlp/WhisperX, then OpenAI"""
-        logger.info(f"[sum] Command invoked with URL: {youtube_url}")
-        
+        logger.info(f"[sum] Command invoked with URL: {url}")
+
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
-        
+
         # Check API key
         if not os.getenv("OPENAI_API_KEY"):
             await ctx.send("❌ OPENAI_API_KEY not set in environment")
             return
-        
-        await ctx.send(f"📝 Processing: {youtube_url}")
-        
+
+        is_youtube = is_youtube_url(url)
+        video_id = get_video_id(url) if is_youtube else None
+
+        await ctx.send(f"📝 Processing: {url}")
+
         loop = asyncio.get_event_loop()
-        video_id = get_video_id(youtube_url)
-        
-        if not video_id:
-            await ctx.send("❌ Invalid YouTube URL")
-            return
-        
+
         try:
-            video_title = await get_video_title(youtube_url)
+            video_title = await get_video_title(url) if is_youtube else "Unknown Video"
             logger.info(f"[sum] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
-            
-            # Get video duration and show topic count
-            logger.info("[sum] Checking video duration...")
-            await ctx.send("⏳ Checking video duration for topic count...")
-            duration = get_video_duration(youtube_url)
-            if duration:
-                duration_mins = duration // 60
-                duration_secs = duration % 60
-                num_topics = get_num_topics(youtube_url)
-                logger.info(f"[sum] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
-                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+
+            # Get video duration and show topic count (YouTube only)
+            if is_youtube:
+                logger.info("[sum] Checking video duration...")
+                await ctx.send("⏳ Checking video duration for topic count...")
+                duration = get_video_duration(url)
+                if duration:
+                    duration_mins = duration // 60
+                    duration_secs = duration % 60
+                    num_topics = get_num_topics(url)
+                    logger.info(f"[sum] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
+                    await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+                else:
+                    logger.warning("[sum] Could not detect video duration")
+                    await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             else:
-                logger.warning("[sum] Could not detect video duration")
-                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
+                await ctx.send("⏱️ Non-YouTube URL detected, using default topic count (10 to 15)")
             
             logger.info("[sum] Fetching transcript...")
             await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
@@ -1459,13 +1461,13 @@ class SummarizationCog(commands.Cog):
             # Try all transcript methods in order
             transcript, source, txt_url, srt_url = await loop.run_in_executor(
                 _executor,
-                lambda: _get_transcript(youtube_url)
+                lambda: _get_transcript(url)
             )
-            
+
             if not transcript:
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
-            
+
             # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
@@ -1474,14 +1476,14 @@ class SummarizationCog(commands.Cog):
                 if srt_url:
                     urls_msg += f"• SRT: {srt_url}\n"
                 await ctx.send(urls_msg)
-            
+
             logger.info("[sum] Identifying topics with OpenAI...")
             await ctx.send(f"📝 Transcript source: {source}\n🤖 Identifying topics with OpenAI (step 1/2)...")
-            
-            # Stage 1: Identify topics (pass youtube_url for duration-based topic count)
+
+            # Stage 1: Identify topics
             topics = await loop.run_in_executor(
                 _executor,
-                lambda: _identify_topics_openai(transcript, video_title, youtube_url)
+                lambda: _identify_topics_openai(transcript, video_title, url)
             )
             
             if not topics:
@@ -1523,59 +1525,60 @@ class SummarizationCog(commands.Cog):
     @commands.command(
         name='sum2',
         help='Summarize using yt-dlp/WhisperX, then Claude',
-        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with Claude',
-        usage='!sum2 <youtube_url>',
-        brief='!sum2 <youtube_url>'
+        description='Get transcript with yt-dlp first, then WhisperX fallback, summarize with Claude. Works with YouTube, Instagram, Twitter/X, TikTok, and other platforms supported by yt-dlp.',
+        usage='!sum2 <video_url>',
+        brief='!sum2 <video_url>'
     )
-    async def sum2_command(self, ctx, youtube_url: str):
+    async def sum2_command(self, ctx, url: str):
         """!sum2 - Use yt-dlp/WhisperX, then Claude"""
-        logger.info(f"[sum2] Command invoked with URL: {youtube_url}")
-        
+        logger.info(f"[sum2] Command invoked with URL: {url}")
+
         if not isinstance(ctx.channel, discord.DMChannel):
             await ctx.send("This command can only be used in DMs.")
             return
-        
-        await ctx.send(f"📝 Processing: {youtube_url}")
-        
+
+        is_youtube = is_youtube_url(url)
+        video_id = get_video_id(url) if is_youtube else None
+
+        await ctx.send(f"📝 Processing: {url}")
+
         loop = asyncio.get_event_loop()
-        video_id = get_video_id(youtube_url)
-        
-        if not video_id:
-            await ctx.send("❌ Invalid YouTube URL")
-            return
-        
+
         try:
-            video_title = await get_video_title(youtube_url)
+            video_title = await get_video_title(url) if is_youtube else "Unknown Video"
             logger.info(f"[sum2] Video title: {video_title}")
             await ctx.send(f"📺 Video: {video_title}")
-            
-            # Get video duration and show topic count
-            logger.info("[sum2] Checking video duration...")
-            await ctx.send("⏳ Checking video duration for topic count...")
-            duration = get_video_duration(youtube_url)
-            if duration:
-                duration_mins = duration // 60
-                duration_secs = duration % 60
-                num_topics = get_num_topics(youtube_url)
-                logger.info(f"[sum2] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
-                await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+
+            # Get video duration and show topic count (YouTube only)
+            if is_youtube:
+                logger.info("[sum2] Checking video duration...")
+                await ctx.send("⏳ Checking video duration for topic count...")
+                duration = get_video_duration(url)
+                if duration:
+                    duration_mins = duration // 60
+                    duration_secs = duration % 60
+                    num_topics = get_num_topics(url)
+                    logger.info(f"[sum2] Video: {duration_mins}m {duration_secs}s, topics: {num_topics}")
+                    await ctx.send(f"⏱️ Video duration: {duration_mins}m {duration_secs}s → Will identify {num_topics} topics")
+                else:
+                    logger.warning("[sum2] Could not detect video duration")
+                    await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
             else:
-                logger.warning("[sum2] Could not detect video duration")
-                await ctx.send("⚠️ Could not detect video duration, using default topic count (10 to 15)")
-            
+                await ctx.send("⏱️ Non-YouTube URL detected, using default topic count (10 to 15)")
+
             logger.info("[sum2] Fetching transcript...")
-            await ctx.send("📝 Getting transcript (YouTube API → yt-dlp → WhisperX)...")
-            
+            await ctx.send("📝 Getting transcript (yt-dlp → WhisperX)...")
+
             # Try all transcript methods in order
             transcript, source, txt_url, srt_url = await loop.run_in_executor(
                 _executor,
-                lambda: _get_transcript(youtube_url)
+                lambda: _get_transcript(url)
             )
-            
+
             if not transcript:
                 await ctx.send("❌ Could not get transcript. Please try again later.")
                 return
-            
+
             # Send transcript URLs if available
             if txt_url or srt_url:
                 urls_msg = "📄 **Transcript URLs:**\n"
@@ -1584,13 +1587,70 @@ class SummarizationCog(commands.Cog):
                 if srt_url:
                     urls_msg += f"• SRT: {srt_url}\n"
                 await ctx.send(urls_msg)
-            
+
             # Check if using wrapper or direct API
             wrapper_key = os.getenv("CLAUDE_WRAPPER_PASSWORD", "")
             if wrapper_key:
                 await ctx.send("🔐 Using Claude wrapper API...")
             else:
                 await ctx.send("🔐 Using direct Claude API (no wrapper password set)...")
+
+            await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
+
+            # Stage 1: Identify topics
+            logger.info("[sum2] Identifying topics with Claude...")
+            topics_result = await loop.run_in_executor(
+                _executor,
+                lambda: _identify_topics_anthropic(transcript, video_title, url)
+            )
+            topics, topics_fallback = topics_result if topics_result else (None, False)
+
+            if topics_fallback:
+                await ctx.send("🔄 Using Claude direct API for topic identification...")
+
+            if not topics:
+                await ctx.send("❌ Could not identify topics. Trying simple summary...")
+                # Fall back to simple summary
+                summary_result = await loop.run_in_executor(
+                    _executor,
+                    lambda: _summarize_with_anthropic(transcript, video_title)
+                )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summary...")
+            else:
+                logger.info(f"[sum2] Found {len(topics)} topics, summarizing each...")
+                await ctx.send(f"📋 Found {len(topics)} topics! Summarizing each (step 2/2)...")
+
+                # Rate limiting before summarization (10 seconds)
+                logger.info("[sum2] Waiting 10 seconds for rate limiting...")
+                await ctx.send("⏳ Waiting 10 seconds for rate limiting...")
+                await asyncio.sleep(10)
+
+                # Stage 2: Summarize all topics
+                summary_result = await loop.run_in_executor(
+                    _executor,
+                    lambda: _summarize_all_topics_anthropic(topics, transcript, video_title)
+                )
+                summary, summary_fallback = summary_result if summary_result else (None, False)
+
+                if summary_fallback:
+                    await ctx.send("🔄 Using Claude direct API for summarization...")
+
+            if summary:
+                logger.info("[sum2] Summary generation complete, sending to Discord...")
+                await ctx.send("✅ **Summary (yt-dlp/Whisper + Claude):**\n")
+                chunks = [summary[i:i+1900] for i in range(0, len(summary), 1900)]
+                for chunk in chunks:
+                    await ctx.send(chunk)
+                    await asyncio.sleep(0.5)
+            else:
+                await ctx.send("❌ Summary generation failed.")
+
+        except Exception as e:
+            await ctx.send(f"❌ An error occurred: {str(e)}")
+            logger.exception(f"Error details (!sum2): {e}")
             
             await ctx.send(f"📝 Transcript source: {source}\n🧠 Identifying topics with Claude (step 1/2)...")
             
