@@ -151,6 +151,19 @@ def is_youtube_url(url: str) -> bool:
     return get_video_id(url) is not None
 
 
+def is_direct_media_url(url: str) -> bool:
+    """Check if URL is a direct media URL (not a platform URL)"""
+    url_lower = url.lower()
+    direct_media_extensions = [".mp3", ".mp4", ".wav", ".ogg", ".m4a", ".webm", ".aac", ".flac"]
+    for pattern in direct_media_extensions:
+        if pattern in url_lower:
+            return True
+    if url.startswith("http://") or url.startswith("https://"):
+        if not is_youtube_url(url):
+            return True
+    return False
+
+
 async def get_video_title(url: str) -> str:
     """Get video title using YouTube oEmbed API"""
     video_id = get_video_id(url)
@@ -701,15 +714,39 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
 def _get_transcript(url: str, progress_callback=None) -> tuple:
     """
     Get transcript - tries YouTube Transcript API first (YouTube only), then yt-dlp (all platforms), then WhisperX.
+    For direct media URLs, skips subtitle methods and goes straight to WhisperX.
     Uploads both TXT and SRT to R2 for all methods.
-    
+
     Returns: (transcript_text, source, txt_url, srt_url)
              txt_url and srt_url will be R2 URLs if uploaded successfully
     """
     logger.info(f"[_get_transcript] Starting transcript fetch for: {url}")
 
     is_youtube = is_youtube_url(url)
+    is_direct = is_direct_media_url(url)
     video_id = get_video_id(url) if is_youtube else None
+
+    # Direct media URL - go straight to WhisperX (no subtitles possible)
+    if is_direct:
+        logger.info("[_get_transcript] Direct media URL detected, using WhisperX directly...")
+        if progress_callback:
+            progress_callback("Direct media URL detected. Transcribing with WhisperX...")
+
+        whisper_result = _transcribe_with_whisperx(url)
+        if whisper_result:
+            transcript = whisper_result.get("preview", "")
+            txt_url = None
+            srt_url = None
+            if whisper_result.get("urls"):
+                txt_url = whisper_result["urls"].get("txt")
+                srt_url = whisper_result["urls"].get("srt")
+            logger.info(f"[_get_transcript] Got transcript from WhisperX, length: {len(transcript)} chars")
+            if progress_callback:
+                progress_callback("Got transcript from WhisperX!")
+            return transcript, "WhisperX", txt_url, srt_url
+
+        logger.error("[_get_transcript] WhisperX transcription failed for direct URL")
+        return None, "Failed", None, None
 
     # 1. Try YouTube Transcript API first (YouTube only)
     if is_youtube:
