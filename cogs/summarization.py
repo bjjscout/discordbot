@@ -146,6 +146,11 @@ def get_video_id(url: str) -> Optional[str]:
     return None
 
 
+def is_youtube_url(url: str) -> bool:
+    """Check if URL is a YouTube URL"""
+    return get_video_id(url) is not None
+
+
 async def get_video_title(url: str) -> str:
     """Get video title using YouTube oEmbed API"""
     video_id = get_video_id(url)
@@ -326,13 +331,11 @@ def _fetch_transcript_youtube_api(youtube_url: str) -> tuple:
 
 def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
     """
-    Fetch transcript using yt-dlp - gets subtitles directly from YouTube.
+    Fetch transcript using yt-dlp - works with YouTube and other platforms supported by yt-dlp.
     
     Returns: (transcript_text, source, srt_transcript)
     """
     video_id = get_video_id(youtube_url)
-    if not video_id:
-        return None, "yt-dlp failed", None
     
     # Get proxy from environment - set YOUTUBE_PROXY in Coolify
     # Format: socks5://username:password@host:port
@@ -343,26 +346,29 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
         proxy_indicators = ['proxy', 'socks', 'timeout', 'unreachable', 'connection', 'host', 'socket', '429', 'rate']
         return any(indicator in error_msg for indicator in proxy_indicators)
 
-    def _try_ytdlp(proxy: str) -> tuple:
+    def _try_ytdlp(proxy: str, url: str, vid: Optional[str]) -> tuple:
         ydl_opts = {
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitlesformat': 'vtt',
             'skip_download': True,
-            'outtmpl': f'/tmp/{video_id}.%(ext)s',
             'quiet': True,
             'no_warnings': True,
             'socket_timeout': 30,
         }
         if proxy:
             ydl_opts['proxy'] = proxy
+        
+        # Use video_id in outtmpl if it's a YouTube URL, otherwise let yt-dlp handle it
+        if vid:
+            ydl_opts['outtmpl'] = f'/tmp/{vid}.%(ext)s'
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
+            info = ydl.extract_info(url, download=False)
             subtitles = info.get('subtitles') or info.get('automatic_captions')
 
             if subtitles:
-                ydl.download([youtube_url])
+                ydl.download([url])
                 lang_order = ['en', 'en-US', 'en-GB', 'a.en', 'pt', 'pt-BR', 'es', 'es-ES']
                 subtitle_lang = None
 
@@ -374,7 +380,13 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
                 if not subtitle_lang:
                     subtitle_lang = list(subtitles.keys())[0]
 
-                vtt_path = f'/tmp/{video_id}.{subtitle_lang}.vtt'
+                # Get the filename yt-dlp used
+                filename = ydl.prepare_filename(info)
+                vtt_path = f'{filename}.{subtitle_lang}.vtt'
+                
+                if not os.path.exists(vtt_path):
+                    vtt_path = f'/tmp/{subtitle_lang}.vtt'
+                
                 if os.path.exists(vtt_path):
                     with open(vtt_path, 'r', encoding='utf-8') as f:
                         vtt_content = f.read()
@@ -396,6 +408,91 @@ def _fetch_transcript_ytdlp(youtube_url: str) -> tuple:
                         return text, source, srt_transcript
 
         return None, "yt-dlp no subtitles", None
+
+    def _try_ytdlp_with_lang(proxy: str, url: str, vid: Optional[str], langs: list) -> tuple:
+        ydl_opts = {
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitlesformat': 'vtt',
+            'skip_download': True,
+            'quiet': True,
+            'no_warnings': True,
+            'socket_timeout': 30,
+            'subtitleslangs': langs,
+        }
+        if proxy:
+            ydl_opts['proxy'] = proxy
+        if vid:
+            ydl_opts['outtmpl'] = f'/tmp/{vid}.%(ext)s'
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            subtitles = info.get('subtitles') or info.get('automatic_captions')
+
+            if subtitles:
+                ydl.download([url])
+                subtitle_lang = None
+                for lang in langs:
+                    if lang in subtitles:
+                        subtitle_lang = lang
+                        break
+
+                if not subtitle_lang:
+                    subtitle_lang = list(subtitles.keys())[0]
+
+                filename = ydl.prepare_filename(info)
+                vtt_path = f'{filename}.{subtitle_lang}.vtt'
+                
+                if not os.path.exists(vtt_path):
+                    vtt_path = f'/tmp/{subtitle_lang}.vtt'
+                
+                if os.path.exists(vtt_path):
+                    with open(vtt_path, 'r', encoding='utf-8') as f:
+                        vtt_content = f.read()
+
+                    text = re.sub(r'<[^>]+>', '', vtt_content)
+                    text = re.sub(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}', '', text)
+                    text = re.sub(r'\n\n+', '\n', text).strip()
+
+                    srt_transcript = _convert_vtt_to_srt(vtt_content)
+
+                    try:
+                        os.remove(vtt_path)
+                    except:
+                        pass
+
+                    if text:
+                        return text, "yt-dlp (needs translation)", srt_transcript
+
+        return None, "yt-dlp no subtitles", None
+
+    try:
+        result = _try_ytdlp(proxy_url, youtube_url, video_id)
+        if result[0]:
+            return result
+    except Exception as e:
+        if proxy_url and _is_proxy_error(e):
+            logger.warning(f"yt-dlp failed with proxy, retrying with modified port: {e}", youtube_url=youtube_url)
+            new_proxy = _get_proxy_with_modified_port(proxy_url)
+            try:
+                result = _try_ytdlp(new_proxy, youtube_url, video_id)
+                if result[0]:
+                    logger.info("yt-dlp succeeded with modified proxy", youtube_url=youtube_url)
+                    return result
+            except Exception as e2:
+                logger.warning(f"yt-dlp retry failed, trying Portuguese/Spanish: {e2}", youtube_url=youtube_url)
+                try:
+                    result = _try_ytdlp_with_lang(new_proxy, youtube_url, video_id, ['pt', 'pt-BR', 'es', 'es-ES'])
+                    if result[0]:
+                        logger.info("yt-dlp succeeded with Portuguese/Spanish subtitles", youtube_url=youtube_url)
+                        return result
+                except Exception as e3:
+                    logger.error(f"yt-dlp retry with modified proxy failed: {e3}", youtube_url=youtube_url)
+        else:
+            logger.error(f"yt-dlp transcript fetch error: {e}", youtube_url=youtube_url)
+            return None, "yt-dlp failed", None
+
+    return None, "yt-dlp no subtitles", None
 
     def _try_ytdlp_with_lang(proxy: str, langs: list) -> tuple:
         ydl_opts = {
@@ -601,68 +698,76 @@ def _transcribe_with_whisperx(video_url: str) -> Optional[Dict[str, Any]]:
     return _poll_transcription_job(job_id)
 
 
-def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
+def _get_transcript(url: str, progress_callback=None) -> tuple:
     """
-    Get transcript - tries YouTube Transcript API first, then yt-dlp, then WhisperX.
+    Get transcript - tries YouTube Transcript API first (YouTube only), then yt-dlp (all platforms), then WhisperX.
     Uploads both TXT and SRT to R2 for all methods.
     
     Returns: (transcript_text, source, txt_url, srt_url)
              txt_url and srt_url will be R2 URLs if uploaded successfully
     """
-    logger.info(f"[_get_transcript] Starting transcript fetch for: {youtube_url}")
-    
-    video_id = get_video_id(youtube_url)
-    
-    # 1. Try YouTube Transcript API first
-    if progress_callback:
-        progress_callback("Trying to get transcript with YouTube Transcript API...")
-    
-    logger.info("[_get_transcript] Attempting YouTube Transcript API...")
-    transcript, source, srt_transcript = _fetch_transcript_youtube_api(youtube_url)
-    if transcript:
-        logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
+    logger.info(f"[_get_transcript] Starting transcript fetch for: {url}")
+
+    is_youtube = is_youtube_url(url)
+    video_id = get_video_id(url) if is_youtube else None
+
+    # 1. Try YouTube Transcript API first (YouTube only)
+    if is_youtube:
         if progress_callback:
-            progress_callback("Got transcript from YouTube Transcript API!")
-        
-        # Upload both TXT and SRT to R2
-        txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
-        logger.info(f"[_get_transcript] YouTube API TXT R2 URL: {txt_url}")
-        
-        srt_url = None
-        if srt_transcript:
-            srt_url = upload_transcript_to_r2(srt_transcript, video_id, "srt")
-            logger.info(f"[_get_transcript] YouTube API SRT R2 URL: {srt_url}")
-        
-        return transcript, source, txt_url, srt_url
-    
-    # 2. Fall back to yt-dlp if YouTube API failed
-    logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
-    if progress_callback:
-        progress_callback("YouTube Transcript API failed. Trying yt-dlp...")
-    
-    transcript, source, srt_transcript = _fetch_transcript_ytdlp(youtube_url)
+            progress_callback("Trying to get transcript with YouTube Transcript API...")
+
+        logger.info("[_get_transcript] Attempting YouTube Transcript API...")
+        transcript, source, srt_transcript = _fetch_transcript_youtube_api(url)
+        if transcript:
+            logger.info(f"[_get_transcript] Got transcript from YouTube API, length: {len(transcript)} chars")
+            if progress_callback:
+                progress_callback("Got transcript from YouTube Transcript API!")
+
+            # Upload both TXT and SRT to R2
+            txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
+            logger.info(f"[_get_transcript] YouTube API TXT R2 URL: {txt_url}")
+
+            srt_url = None
+            if srt_transcript:
+                srt_url = upload_transcript_to_r2(srt_transcript, video_id, "srt")
+                logger.info(f"[_get_transcript] YouTube API SRT R2 URL: {srt_url}")
+
+            return transcript, source, txt_url, srt_url
+
+        # Fall through to yt-dlp if YouTube API failed
+        logger.info("[_get_transcript] YouTube API failed, trying yt-dlp...")
+        if progress_callback:
+            progress_callback("YouTube Transcript API failed. Trying yt-dlp...")
+
+    else:
+        logger.info("[_get_transcript] Non-YouTube URL, skipping YouTube Transcript API, trying yt-dlp directly...")
+        if progress_callback:
+            progress_callback("Getting transcript with yt-dlp...")
+
+    # 2. Fall back to yt-dlp (works with YouTube and other platforms)
+    transcript, source, srt_transcript = _fetch_transcript_ytdlp(url)
     if transcript:
         logger.info(f"[_get_transcript] Got transcript from yt-dlp, length: {len(transcript)} chars")
         if progress_callback:
             progress_callback("Got transcript from yt-dlp!")
-        
+
         # Upload both TXT and SRT to R2
-        txt_url = upload_transcript_to_r2(transcript, video_id, "txt")
+        txt_url = upload_transcript_to_r2(transcript, video_id or "unknown", "txt")
         logger.info(f"[_get_transcript] yt-dlp TXT R2 URL: {txt_url}")
-        
+
         srt_url = None
         if srt_transcript:
-            srt_url = upload_transcript_to_r2(srt_transcript, video_id, "srt")
+            srt_url = upload_transcript_to_r2(srt_transcript, video_id or "unknown", "srt")
             logger.info(f"[_get_transcript] yt-dlp SRT R2 URL: {srt_url}")
-        
+
         return transcript, source, txt_url, srt_url
-    
+
     # 3. Fall back to WhisperX API if both failed
     logger.info("[_get_transcript] yt-dlp failed, trying WhisperX API...")
     if progress_callback:
         progress_callback("yt-dlp failed. Trying WhisperX...")
-    
-    whisper_result = _transcribe_with_whisperx(youtube_url)
+
+    whisper_result = _transcribe_with_whisperx(url)
     if whisper_result:
         transcript = whisper_result.get("preview", "")
         # Get the URLs for TXT and SRT transcripts from WhisperX
@@ -676,7 +781,7 @@ def _get_transcript(youtube_url: str, progress_callback=None) -> tuple:
         if progress_callback:
             progress_callback("Got transcript from WhisperX!")
         return transcript, "WhisperX", txt_url, srt_url
-    
+
     logger.error("[_get_transcript] All transcript methods failed")
     return None, "Failed", None, None
 
